@@ -4,6 +4,7 @@ import { renderPdf } from './pdfview.js';
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const ROOM_TTL = 12 * 3600 * 1000;
+const TRANSLATE_URL = 'https://translate.google.com/?sl=ja&tl=ko&op=images';
 
 const S = {
   store: null,
@@ -22,13 +23,15 @@ const S = {
   inviteCode: '',
   armed: null,
   arrived: null,
+  dealt: new Set(),
   modal: null,
   modalSig: null,
-  doc: { file: null, title: '', zoom: 1, bytes: null },
+  doc: { file: null, title: '', zoom: 1, bytes: null, kind: 'pdf', help: false },
   files: new Map(),
   pending: new Set(),
   seen: { phase: null, round: null },
   conn: 'ok',
+  chat: { open: false, view: 'list', tid: null, picks: [], sig: null, unread: 0 },
 };
 
 /* ---------- 작은 도구들 ---------- */
@@ -59,13 +62,6 @@ const fmtTime = (ms) => {
   const s = Math.ceil(ms / 1000);
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 };
-// 남은 시간. 연장 중에 시간이 지나면 초과 시간을 +로 센다.
-function timerState() {
-  const left = (meta().roundEndsAt || 0) - S.store.now();
-  if (left <= 0 && held()) return { text: `+${fmtTime(-left)}`, cls: 'over' };
-  return { text: fmtTime(Math.max(0, left)), cls: left < 60000 ? 'low' : '' };
-}
-const timerText = () => timerState().text;
 const clock = (t) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 let toastTimer;
@@ -80,9 +76,42 @@ async function busy(p) {
   try { await p; } catch (err) { console.error(err); toast(err.message || String(err)); }
 }
 
+/* ---------- 테마 ---------- */
+// 인원별 버전이 있는 테마는 고른 버전으로 캐릭터·자료·카드를 채운다. '@키'는 fileMap에서 찾는다.
+function resolveTheme(t, v) {
+  if (!t.variants) return t;
+  const key = t.variants[v] ? v : Object.keys(t.variants).pop();
+  const vv = t.variants[key];
+  const f = (p) => (p && p.startsWith('@') ? t.fileMap?.[`${key}:${p.slice(1)}`] : p);
+  const characters = vv.characters.map((id) => ({
+    id,
+    ...t.characterInfo[id],
+    cover: t.charCover ? f(`@${id}:${t.charCover}`) : null,
+    docs: (t.charDocs || []).map((d) => ({ ...d, file: f(`@${id}:${d.key}`) })),
+    endDocs: (t.charEndDocs || []).map((d) => ({ ...d, file: f(`@${id}:${d.key}`) })),
+  }));
+  return {
+    ...t,
+    ...vv,
+    variant: key,
+    characters,
+    docs: (t.docs || []).map((d) => ({ ...d, file: f(d.file) })),
+    cards: (vv.cards || t.cards || []).map((c) => ({ ...c, file: f(c.file) })),
+    rounds: t.rounds.map((r) => (r.minutesByVariant ? { ...r, minutes: r.minutesByVariant[key] ?? r.minutes } : r)),
+  };
+}
+const isPdf = (t) => t.kind === 'pdf';
+const themeLabel = (t) => (t.no ? `테마 ${t.no}` : t.label || '샘플');
+const totalMinutes = (t) => t.rounds.reduce((s, r) => s + (r.minutes || 0), 0);
+const themePortraits = (t) => (t.characters || Object.values(t.characterInfo || {})).map((c) => c.img).filter(Boolean);
+const imgUrl = (p, t = S.theme) => (p ? t.base + p : '');
+const cardRules = () => ({ public: true, share: true, give: true, ...(S.theme.cardRules || {}) });
+
 /* ---------- 방 상태 읽기 ---------- */
 const roomPath = (p = '') => `rooms/${S.code}${p ? `/${p}` : ''}`;
 const meta = () => S.room?.meta || {};
+const phase = () => meta().phase;
+const roundNo = () => meta().round ?? 0;
 const players = () => Object.entries(S.room?.players || {})
   .filter(([, p]) => p && p.name)
   .map(([id, p]) => ({ id, ...p }))
@@ -101,19 +130,25 @@ const who = (pid) => {
   const c = charOf(p.char);
   return c ? `${p.name}(${c.name})` : p.name;
 };
-const isPdf = (t) => t.kind === 'pdf';
-const themeLabel = (t) => (t.no ? `테마 ${t.no}` : t.label || '샘플');
-const totalMinutes = (t) => t.rounds.reduce((s, r) => s + (r.minutes || 0), 0);
 const cardOf = (id) => S.theme.cards.find((c) => c.id === id);
 const cardState = (id) => S.room?.cards?.[id] || {};
 const locName = (id) => S.theme.locations?.find((l) => l.id === id)?.name || id;
 const cardNo = (c) => String(S.theme.cards.filter((x) => x.location === c.location).indexOf(c) + 1).padStart(2, '0');
-const cardTag = (c) => `${locName(c.location)} ${cardNo(c)}`;
+const cardTag = (c) => c.title && c.file ? c.title : `${locName(c.location)} ${cardNo(c)}`;
 const canSee = (id) => {
   const st = cardState(id);
-  return st.owner === S.pid || st.public || !!st.shared?.[S.pid] || isGM() || meta().phase === 'end';
+  return st.owner === S.pid || st.public || !!st.shared?.[S.pid] || isGM() || phase() === 'end';
 };
+// 자료가 열리는 단계에 왔는지
+const reached = (from = 0) => ['vote', 'end'].includes(phase()) || (phase() === 'play' && roundNo() >= from);
 const log = (m) => S.store.push(roomPath('log'), { t: S.store.now(), m });
+
+function avatar(pid, size = '') {
+  const p = S.room?.players?.[pid];
+  const c = p && charOf(p.char);
+  if (c?.img) return `<span class="ava ${size}"><img src="${esc(imgUrl(c.img))}" alt=""></span>`;
+  return `<span class="ava ava-text ${size}">${esc((p?.name || '?').trim().slice(0, 1))}</span>`;
+}
 
 /* ---------- 시작 ---------- */
 async function boot() {
@@ -134,6 +169,7 @@ async function boot() {
   document.addEventListener('click', onClick);
   document.addEventListener('submit', onSubmit);
   document.addEventListener('keydown', onKey);
+  document.addEventListener('change', onChange);
   setInterval(tick, 1000);
 
   const q = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
@@ -168,7 +204,7 @@ function onConnStatus(s) {
 function render() {
   const view = $('#view');
   const keep = {};
-  view.querySelectorAll('input[id]').forEach((i) => { if (i.type !== 'checkbox' && i.type !== 'radio') keep[i.id] = i.value; });
+  view.querySelectorAll('input[id], select[id]').forEach((i) => { if (i.type !== 'checkbox' && i.type !== 'radio') keep[i.id] = i.value; });
   const focusId = document.activeElement?.id;
 
   if (S.view === 'home') renderHome(); else renderRoom();
@@ -182,6 +218,7 @@ function render() {
     if (el && view.contains(el)) el.focus();
   }
   renderModal();
+  renderChat();
 }
 
 function renderHome() {
@@ -193,7 +230,7 @@ function renderHome() {
     <header class="masthead">
       <p class="eyebrow">온라인 머더 미스터리</p>
       <h1 class="wordmark">머더 미스터리<br><em>테이블</em></h1>
-      <p class="lede">테마를 고르고 이름을 적은 뒤 같은 방에 모이세요. 캐릭터는 모두가 동의해야 확정되고, 단서 카드는 테이블에 펼쳐 놓고 가져가요.</p>
+      <p class="lede">테마를 고르고 이름을 적은 뒤 같은 방에 모이세요. 캐릭터는 모두가 동의해야 확정되고, 단서는 테이블에 펼쳐 놓고 가져가요.</p>
     </header>
     ${isPeer() ? '<p class="notice"><strong>방장 모드</strong> · 방을 만든 사람의 브라우저가 게임을 진행해요. 친구들에게 방 코드나 초대 링크를 보내 주세요. 방장은 게임이 끝날 때까지 창을 닫지 마세요.</p>' : ''}
     ${last ? `<p class="notice">최근에 있던 방 <strong>${esc(last.code)}</strong> · ${esc(last.title || '')}${last.role === 'host' ? ' · 내가 방장' : ''}
@@ -204,7 +241,7 @@ function renderHome() {
         <div class="theme-grid">${S.themes.map(themeCard).join('')}</div>
       </section>
       <aside class="side">
-        ${t ? enterPanel(t, name) : `<div class="panel"><p class="eyebrow">2 · 이름 적고 입장</p><p class="muted small" style="margin-top:8px">테마를 고르면 새 방을 만들거나, 그 테마로 열려 있는 방에 들어갈 수 있어요.</p></div>`}
+        ${t ? enterPanel(t, name) : `<div class="panel"><p class="eyebrow">2 · 이름 적고 입장</p><p class="muted small" style="margin-top:8px">테마를 고르면 새 방을 만들 수 있어요.</p></div>`}
         <div class="panel">
           <form id="f-code" class="enter">
             <div class="enter-head"><p class="eyebrow">초대받았나요?</p><h3>방 코드로 들어가기</h3></div>
@@ -222,11 +259,14 @@ function renderHome() {
 
 function themeCard(t, i) {
   const n = t.players.min === t.players.max ? `${t.players.max}명` : `${t.players.min}–${t.players.max}명`;
-  const tags = [n, `진행 약 ${totalMinutes(t)}분`, t.cards?.length ? `단서 카드 ${t.cards.length}장` : '카드 없음', t.lock ? '암호 필요' : ''].filter(Boolean);
+  const cards = (t.cards?.length || Object.values(t.variants || {}).some((v) => v.cards?.length)) ? '단서 카드' : '카드 없음';
+  const tags = [n, `진행 약 ${totalMinutes(t)}분`, cards, t.rounds.some((r) => r.talk) ? '밀담' : '', t.lock ? '암호 필요' : ''].filter(Boolean);
+  const faces = themePortraits(t).slice(0, 7);
   return `<button type="button" class="theme-card ${S.selTheme === t.id ? 'sel' : ''}" style="--tilt:${[-1.2, 0.8, -0.5, 1][i % 4]}deg" data-act="pick-theme" data-id="${t.id}">
     <span class="theme-no">${esc(themeLabel(t))}</span>
     <span class="theme-title">${esc(t.title)}</span>
     ${t.subtitle ? `<span class="theme-sub">${esc(t.subtitle)}</span>` : ''}
+    ${faces.length ? `<span class="theme-faces">${faces.map((f, k) => `<img src="${esc(imgUrl(f, t))}" alt="" style="--k:${k}" loading="lazy">`).join('')}</span>` : ''}
     <span class="theme-meta">${tags.map((x) => `<span class="tag">${esc(x)}</span>`).join('')}</span>
   </button>`;
 }
@@ -236,6 +276,7 @@ function enterPanel(t, name) {
   const open = Object.entries(S.lobby)
     .filter(([, r]) => r && r.theme === t.id && r.phase === 'select' && now - (r.createdAt || 0) < ROOM_TTL)
     .sort((a, b) => b[1].createdAt - a[1].createdAt);
+  const variants = t.variants ? Object.entries(t.variants) : [];
   return `<div class="panel enter">
     <div class="enter-head">
       <p class="eyebrow">2 · 이름 적고 입장</p>
@@ -245,10 +286,11 @@ function enterPanel(t, name) {
     </div>
     <form id="f-create">
       <label class="field"><span>내 이름</span><input class="input" id="in-name" name="name" maxlength="16" value="${esc(name)}" required></label>
-      ${t.lock ? `<label class="field"><span>테마 암호 (방을 만들 때만 필요해요)</span><input class="input" id="in-pw" name="pw" type="password" autocomplete="off" value="${esc(lGet(`mm:pw:${t.id}`) || '')}"></label>` : ''}
+      ${variants.length ? `<label class="field"><span>인원</span><select class="input" id="in-variant" name="variant">${variants.map(([k, v]) => `<option value="${esc(k)}" ${k === variants[variants.length - 1][0] ? 'selected' : ''}>${esc(v.label || k)}</option>`).join('')}</select></label>` : ''}
+      ${t.lock ? `<label class="field"><span>테마 암호 (방을 만들 때만 필요해요)</span><input class="input" id="in-pw" name="pw" type="password" autocomplete="off" value="${esc(lGet(`mm:pw:${t.id}`) || lGet('mm:pw') || '')}"></label>` : ''}
       <button class="btn" type="submit">새 방 만들고 입장</button>
     </form>
-    ${isPeer() ? '<p class="small muted">방을 만들면 방 코드가 생겨요. 친구들은 오른쪽 아래 \'방 코드로 들어가기\'나 초대 링크로 들어와요.</p>' : `<div class="room-list">
+    ${isPeer() ? '<p class="small muted">방을 만들면 방 코드가 생겨요. 친구들은 \'방 코드로 들어가기\'나 초대 링크로 들어와요.</p>' : `<div class="room-list">
       <p class="small muted">${open.length ? '이 테마로 열려 있는 방 · 위에 이름을 적고 들어가세요' : '이 테마로 열려 있는 방이 아직 없어요.'}</p>
       ${open.map(([code, r]) => `<div class="room-row">
         <span><span class="room-code">${esc(code)}</span> <span class="muted small">${r.count || 0}명 모임</span></span>
@@ -265,13 +307,38 @@ function renderRoom() {
   $('#view').innerHTML = `<div class="room">
     <div class="roombar">
       <button class="btn ghost sm" data-act="leave">${m.phase === 'select' ? '방 나가기' : '홈으로'}</button>
-      <div class="roombar-title"><span class="theme-no">${esc(themeLabel(t))}</span><strong>${esc(t.title)}</strong></div>
+      <div class="roombar-title"><span class="theme-no">${esc(themeLabel(t))}${t.label && t.no ? ` · ${esc(t.label)}` : ''}</span><strong>${esc(t.title)}</strong></div>
+      ${t.relations ? '<button class="btn ghost sm" data-act="relations">관계도</button>' : ''}
       <button class="code-chip" data-act="copy-link" title="초대 링크 복사">방 ${esc(S.code)} · 링크 복사</button>
     </div>
     ${S.conn === 'lost' ? '<p class="conn-lost">방장과 연결이 끊겼어요. 다시 연결하는 중이에요… 방장이 창을 닫았다면 다시 열 때까지 기다려 주세요.</p>' : ''}
     ${isServerHost() ? '<p class="host-note">내가 방장이에요. 이 창이 게임을 진행하니 끝날 때까지 닫지 마세요. 새로고침은 괜찮아요.</p>' : ''}
+    ${seatsStrip()}
     ${body}
   </div>`;
+  queueMicrotask(() => {
+    document.querySelectorAll('.mcard.deal').forEach((el) => S.dealt.add(el.dataset.id));
+  });
+}
+
+// 테이블에 앉은 사람들
+function seatsStrip() {
+  const m = meta();
+  const badge = (p) => {
+    if (m.phase === 'select') return p.agree === m.selVer ? '<span class="seat-badge ok">동의</span>' : '';
+    if (m.phase === 'play') return p.skip === m.round ? '<span class="seat-badge">건너뜀</span>' : '';
+    if (m.phase === 'vote') return !p.gm && p.vote ? '<span class="seat-badge ok">투표함</span>' : '';
+    return '';
+  };
+  return `<div class="seats">${players().map((p) => {
+    const c = charOf(p.char);
+    return `<div class="seat ${p.id === S.pid ? 'me' : ''} ${p.online ? '' : 'off'}" title="${esc(who(p.id))}">
+      <span class="seat-ava">${avatar(p.id, 'lg')}${p.id === hostId() ? '<span class="crown" title="방장">방장</span>' : ''}</span>
+      <span class="seat-name">${esc(p.name)}</span>
+      <span class="seat-char">${p.gm ? '진행자' : esc(c?.name || '고르는 중')}</span>
+      ${badge(p)}
+    </div>`;
+  }).join('')}</div>`;
 }
 
 /* 캐릭터 선택 */
@@ -291,6 +358,7 @@ function selectView() {
   if (Object.values(holders).some((a) => a.length > 1)) problems.push('같은 캐릭터를 고른 사람이 있어요.');
   if (act.length > t.characters.length) problems.push(`캐릭터는 ${t.characters.length}명인데 플레이어가 ${act.length}명이에요. 남는 사람은 진행자로 참가해 주세요.`);
   const short = act.length < t.players.min ? `이 테마는 ${t.players.min}명이 하는 걸 권장해요. 지금 ${act.length}명이라 남는 캐릭터는 아무도 맡지 않게 돼요.` : '';
+  const publicDocs = (t.docs || []).filter((d) => d.show === 'always');
 
   return `
   <section class="phase-head">
@@ -301,23 +369,17 @@ function selectView() {
       <button class="btn ${iAgree ? 'on' : ''}" data-act="agree" ${problems.length && !iAgree ? 'disabled' : ''}>${iAgree ? '동의함 · 취소' : '동의'} <span class="small">${agreed}/${ps.length}</span></button>
       <button class="btn ghost" data-act="random">전체 랜덤</button>
       ${t.allowGM ? `<button class="btn ghost" data-act="toggle-gm">${mine.gm ? '플레이어로 참가' : '진행자(GM)로 참가'}</button>` : ''}
-      ${isPdf(t) ? '<button class="btn ghost" data-act="doc" data-file="overview">개요 읽기</button>' : '<button class="btn ghost" data-act="intro">사건 개요</button>'}
+      ${isPdf(t) ? publicDocs.map((d) => `<button class="btn ghost" data-act="doc" data-file="d:${esc(d.id)}">${esc(d.title)}</button>`).join('') : '<button class="btn ghost" data-act="intro">사건 개요</button>'}
     </div>
     ${problems.map((x) => `<p class="warn">${esc(x)}</p>`).join('')}
     ${short ? `<p class="muted small">${esc(short)}</p>` : ''}
+    ${t.lang && t.lang !== 'ko' ? '<p class="muted small">자료는 일본어 원본이에요. 자료 창의 \'번역 도움\'으로 한국어로 볼 수 있어요.</p>' : ''}
   </section>
   <div class="select-layout">
     <div class="char-grid">${t.characters.map((c) => charCard(c, holders[c.id] || [])).join('')}</div>
     <aside class="side">
-      <div class="panel"><h3>참가자 ${ps.length}명</h3>
-        <ul class="plist">${ps.map((p) => `<li class="${p.id === S.pid ? 'me' : ''}">
-          <span class="dot ${p.online ? 'on' : ''}"></span>
-          <span class="pname">${esc(p.name)}</span>${p.id === hostId() ? '<span class="host-tag">방장</span>' : ''}
-          <span class="pchar">${p.gm ? '진행자' : esc(charOf(p.char)?.name || '고르는 중')}</span>
-          <span class="pstate ${p.agree === m.selVer ? 'ok' : 'muted'}">${p.agree === m.selVer ? '동의' : '대기'}</span>
-        </li>`).join('')}</ul>
-      </div>
       ${t.howto ? `<div class="panel"><h3>이 테마 진행 방법</h3><p class="small muted" style="white-space:pre-wrap">${esc(t.howto)}</p></div>` : ''}
+      ${logPanel()}
     </aside>
   </div>`;
 }
@@ -325,13 +387,20 @@ function selectView() {
 function charCard(c, holders) {
   const mine = holders.some((p) => p.id === S.pid);
   const cls = [mine ? 'mine' : '', holders.length && !mine ? 'taken' : '', holders.length > 1 ? 'clash' : ''].join(' ');
-  return `<button type="button" class="char-card ${cls}" data-act="pick-char" data-id="${c.id}">
-    <span class="glyph">${esc(c.name.slice(0, 1))}</span>
-    <span class="name">${esc(c.name)}</span>
-    <span class="sub">${esc(c.sub || '')}</span>
-    <span class="note">${esc(c.note || '')}</span>
-    ${holders.length ? `<span class="who">${holders.map((p) => esc(p.name)).join(', ')}</span>` : ''}
-  </button>`;
+  return `<div class="char-card ${cls}">
+    <button type="button" class="char-pick" data-act="pick-char" data-id="${c.id}" aria-label="${esc(c.name)} 고르기">
+      <span class="char-photo">${c.img ? `<img src="${esc(imgUrl(c.img))}" alt="" loading="lazy">` : `<span class="glyph">${esc(c.name.slice(0, 1))}</span>`}</span>
+      <span class="char-text">
+        <span class="name">${esc(c.name)}</span>
+        <span class="sub">${esc(c.sub || '')}</span>
+        <span class="note">${esc(c.note || '')}</span>
+      </span>
+    </button>
+    <span class="char-foot">
+      ${holders.length ? `<span class="who">${holders.map((p) => esc(p.name)).join(', ')}</span>` : '<span class="who empty">비어 있음</span>'}
+      ${c.cover ? `<button class="btn ghost sm" data-act="doc" data-file="v:${c.id}">표지</button>` : ''}
+    </span>
+  </div>`;
 }
 
 /* 진행 중 */
@@ -339,6 +408,15 @@ function stepsBar(current) {
   const t = S.theme;
   const names = [...t.rounds.map((r) => r.name), '투표', '결과'];
   return `<ol class="steps">${names.map((n, i) => `<li class="${i < current ? 'done' : i === current ? 'now' : ''}">${esc(n)}</li>`).join('')}</ol>`;
+}
+
+const CIRC = 2 * Math.PI * 52;
+function timerState() {
+  const m = meta();
+  const total = (S.theme.rounds[m.round]?.minutes || 1) * 60000;
+  const left = (m.roundEndsAt || 0) - S.store.now();
+  if (left <= 0 && held()) return { text: `+${fmtTime(-left)}`, cls: 'over', frac: 1 };
+  return { text: fmtTime(Math.max(0, left)), cls: left < 60000 ? 'low' : '', frac: Math.max(0, Math.min(1, left / total)) };
 }
 
 function playView() {
@@ -350,67 +428,79 @@ function playView() {
   const iSkip = me().skip === m.round;
   const hold = held();
   const hostName = S.room.players?.[hostId()]?.name || '방장';
+  const ts = timerState();
   return `
   <section class="round-head">
     ${stepsBar(m.round)}
     <div class="round-now">
-      <p class="eyebrow">${m.round + 1} / ${t.rounds.length} 단계</p>
+      <p class="eyebrow">${m.round + 1} / ${t.rounds.length} 단계${r.talk ? ' · <span class="talk-on">밀담 가능</span>' : ''}</p>
       <h2>${esc(r.name)}</h2>
       ${r.note ? `<p class="desc">${esc(r.note)}</p>` : ''}
     </div>
     <div class="timer-box">
-      <span id="timer" class="timer">${timerText()}</span>
+      <div class="clock ${ts.cls}">
+        <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="clock-bg" cx="60" cy="60" r="52"></circle>
+          <circle id="clock-arc" class="clock-arc" cx="60" cy="60" r="52" stroke-dasharray="${CIRC.toFixed(1)}" stroke-dashoffset="${(CIRC * (1 - ts.frac)).toFixed(1)}"></circle></svg>
+        <span id="timer" class="timer">${ts.text}</span>
+      </div>
       ${hold ? `<span class="hold-note">연장 중 · ${isHost() ? '원할 때 다음 단계로 넘기세요' : `${esc(hostName)}님이 넘길 때까지 계속돼요`}</span>` : ''}
       <div class="btn-row">
         <button class="btn ${iSkip ? 'on' : 'ghost'}" data-act="skip">${iSkip ? '건너뛰기 취소' : '건너뛰기'} <span class="small">${skipped}/${ps.length}</span></button>
         ${isHost() ? `<button class="btn ghost" data-act="hold">${hold ? '연장 취소' : '연장'}</button>` : ''}
         ${isHost() && hold ? '<button class="btn" data-act="next-step">다음 단계로</button>' : ''}
       </div>
-      <span class="small muted">모두 건너뛰기를 누르면 바로 다음 단계로 가요.${isHost() && !hold ? ' 방장이 연장을 누르면 시간이 끝나도 넘어가지 않아요.' : ''}</span>
     </div>
   </section>
   <div class="play-layout">
     <div class="play-main">
-      <div class="docs">${docButtons()}</div>
+      ${docsPanel()}
       ${t.cards?.length ? tableView() + handView() : ''}
     </div>
-    <aside class="side">${placesPanel()}${playersPanel()}${t.cards?.length ? sharedPanel() : ''}${logPanel()}</aside>
+    <aside class="side">${placesPanel()}${t.cards?.length ? sharedPanel() : ''}${logPanel()}</aside>
   </div>`;
 }
 
-function docBtn(file, title, sub, key = false) {
-  return `<button class="doc-btn ${key ? 'key' : ''}" data-act="doc" data-file="${esc(file)}"><strong>${esc(title)}</strong><span>${esc(sub)}</span></button>`;
+function docTile(key, title, sub, mine, from) {
+  if (!canOpen(key)) {
+    return `<button class="doc-btn locked" disabled><strong>${esc(title)}</strong><span>${from != null ? `${from + 1}단계에 열려요` : '아직 볼 수 없어요'}</span></button>`;
+  }
+  return `<button class="doc-btn ${mine ? 'key' : ''}" data-act="doc" data-file="${esc(key)}"><strong>${esc(title)}</strong><span>${esc(sub)}</span></button>`;
 }
 
-function docButtons() {
+function docsPanel() {
   const t = S.theme;
   const c = charOf(me().char);
-  const out = [];
+  const mine = [];
+  const shared = [];
   if (isPdf(t)) {
-    if (c?.file) out.push(docBtn(`char:${c.id}`, '내 핸드아웃', `${c.name} · 나만 볼 수 있어요`, true));
-    out.push(docBtn('overview', '개요', '모두 공개'));
-    if (isGM()) {
-      t.characters.forEach((ch) => { if (ch.file) out.push(docBtn(`char:${ch.id}`, ch.name, '핸드아웃')); });
-      if (t.files?.gm) out.push(docBtn('gm', 'GM 자료', '진행자만'));
-      if (t.files?.ending) out.push(docBtn('ending', '엔딩', '진행자만'));
-    }
+    if (c) (c.docs || []).forEach((d, i) => mine.push(docTile(`c:${c.id}:${i}`, d.title, `${c.name} · 나만 볼 수 있어요`, true, d.from || 0)));
+    (t.docs || []).forEach((d) => {
+      if (d.show === 'end') return;
+      if (d.show === 'gm' && !isGM()) return;
+      shared.push(docTile(`d:${d.id}`, d.title, d.show === 'gm' ? '진행자만' : '모두 공개', false, d.from));
+    });
+    t.characters.forEach((ch) => { if (ch.cover) shared.push(docTile(`v:${ch.id}`, `${ch.name} 표지`, '모두 공개', false)); });
+    if (isGM()) t.characters.forEach((ch) => (ch.docs || []).forEach((d, i) => shared.push(docTile(`c:${ch.id}:${i}`, `${ch.name} · ${d.title}`, '진행자', false))));
   } else {
-    if (c) out.push(`<button class="doc-btn key" data-act="sheet" data-id="${c.id}"><strong>내 캐릭터</strong><span>${esc(c.name)} · 나만 볼 수 있어요</span></button>`);
-    out.push('<button class="doc-btn" data-act="intro"><strong>사건 개요</strong><span>모두 공개</span></button>');
-    if (isGM()) t.characters.forEach((ch) => out.push(`<button class="doc-btn" data-act="sheet" data-id="${ch.id}"><strong>${esc(ch.name)}</strong><span>캐릭터 시트</span></button>`));
+    if (c) mine.push(`<button class="doc-btn key" data-act="sheet" data-id="${c.id}"><strong>내 캐릭터</strong><span>${esc(c.name)} · 나만 볼 수 있어요</span></button>`);
+    shared.push('<button class="doc-btn" data-act="intro"><strong>사건 개요</strong><span>모두 공개</span></button>');
+    if (isGM()) t.characters.forEach((ch) => shared.push(`<button class="doc-btn" data-act="sheet" data-id="${ch.id}"><strong>${esc(ch.name)}</strong><span>캐릭터 시트</span></button>`));
   }
-  return out.join('');
+  return `<section class="docs-wrap">
+    ${mine.length ? `<div><p class="eyebrow">내 자료</p><div class="docs">${mine.join('')}</div></div>` : ''}
+    <div><p class="eyebrow">공용 자료</p><div class="docs">${shared.join('')}</div></div>
+  </section>`;
 }
 
 function picksLeft() {
-  const r = S.theme.rounds[meta().round] || {};
+  const r = S.theme.rounds[roundNo()] || {};
   if (r.pick == null) return Infinity;
-  const used = Object.values(S.room?.cards || {}).filter((c) => c.takenBy === S.pid && c.takenRound === meta().round).length;
+  const used = Object.values(S.room?.cards || {}).filter((c) => c.takenBy === S.pid && c.takenRound === roundNo()).length;
   return Math.max(0, r.pick - used);
 }
 
 function pickText() {
-  const r = S.theme.rounds[meta().round] || {};
+  const r = S.theme.rounds[roundNo()] || {};
   if (isGM()) return '진행자는 카드를 가져가지 않아요.';
   if (r.pick === 0) return '이번 단계에는 카드를 가져갈 수 없어요.';
   if (r.pick == null) return '카드를 원하는 만큼 가져갈 수 있어요.';
@@ -419,36 +509,37 @@ function pickText() {
 
 function tableView() {
   const t = S.theme;
-  const m = meta();
-  const visible = t.cards.filter((c) => (c.round ?? 0) <= m.round);
+  const visible = t.cards.filter((c) => (c.round ?? 0) <= roundNo());
   const locs = (t.locations || [])
     .map((l) => ({ ...l, cards: visible.filter((c) => c.location === l.id) }))
     .filter((l) => l.cards.length);
+  let n = 0;
   return `<section class="table">
     <div class="table-head"><h3>조사 테이블</h3><p class="small muted">${esc(pickText())}</p></div>
-    <div class="locs">${locs.map((l) => `<div class="loc"><h4>${esc(l.name)}</h4><div class="loc-cards">${l.cards.map(tableCard).join('')}</div></div>`).join('') || '<p class="muted">아직 펼쳐진 카드가 없어요.</p>'}</div>
+    <div class="locs">${locs.map((l) => `<div class="loc"><h4>${esc(l.name)}</h4><div class="loc-cards">${l.cards.map((c) => tableCard(c, n++)).join('')}</div></div>`).join('') || '<p class="muted">아직 펼쳐진 카드가 없어요. 단계가 진행되면 이곳에 카드가 펼쳐져요.</p>'}</div>
   </section>`;
 }
 
-function tableCard(c) {
+function tableCard(c, i) {
   const st = cardState(c.id);
   const rot = tilt(c.id, 4);
+  const deal = S.dealt.has(c.id) ? '' : 'deal';
   if (!st.owner) {
-    const can = meta().phase === 'play' && picksLeft() > 0 && !isGM();
+    const can = phase() === 'play' && picksLeft() > 0 && !isGM();
     const armed = S.armed === c.id;
-    const attrs = can ? `role="button" tabindex="0" data-act="arm" data-id="${c.id}"` : '';
-    return `<div class="mcard back ${armed ? 'armed' : ''} ${can ? '' : 'locked'}" style="--rot:${rot}deg" ${attrs} aria-label="${esc(cardTag(c))} 카드, 뒷면">
-      <span class="mcard-label"><span class="mcard-loc">${esc(locName(c.location))}</span><span class="mcard-no">${cardNo(c)}</span></span>
+    const attrs = can ? `role="button" tabindex="0" data-act="arm"` : '';
+    return `<div class="mcard back ${armed ? 'armed' : ''} ${can ? '' : 'locked'} ${deal}" data-id="${c.id}" style="--rot:${rot}deg;--d:${i * 90}ms" ${attrs} aria-label="${esc(c.back || cardTag(c))} 카드, 뒷면">
+      <span class="mcard-label">${c.back ? `<span class="mcard-back">${esc(c.back)}</span>` : `<span class="mcard-loc">${esc(locName(c.location))}</span><span class="mcard-no">${cardNo(c)}</span>`}</span>
       ${armed ? `<button class="btn sm take-btn" data-act="take" data-id="${c.id}">가져가기</button>` : ''}
     </div>`;
   }
-  if (st.public) return faceCard(c, '공개');
-  return `<div class="mcard slot" style="--rot:${rot}deg">${esc(st.owner === S.pid ? '내가' : who(st.owner))}<br>가져감</div>`;
+  if (st.public) return faceCard(c, '공개', deal);
+  return `<div class="mcard slot ${deal}" data-id="${c.id}" style="--rot:${rot}deg;--d:${i * 90}ms">${avatar(st.owner)}<span>${esc(st.owner === S.pid ? '내가' : who(st.owner))}<br>가져감</span></div>`;
 }
 
 function faceCard(c, badge = '', extra = '') {
-  return `<div class="mcard face ${extra}" style="--rot:${tilt(c.id, 3)}deg" role="button" tabindex="0" data-act="view-card" data-id="${c.id}">
-    <span class="mcard-loc">${esc(cardTag(c))}</span>
+  return `<div class="mcard face ${extra}" data-id="${c.id}" style="--rot:${tilt(c.id, 3)}deg" role="button" tabindex="0" data-act="view-card">
+    <span class="mcard-loc">${esc(c.file ? locName(c.location) : cardTag(c))}</span>
     <span class="mcard-title">${esc(c.title)}</span>
     ${badge ? `<span class="pub">${esc(badge)}</span>` : ''}
   </div>`;
@@ -473,6 +564,8 @@ function cardList(list) {
 
 function sharedPanel() {
   const cards = S.theme.cards;
+  const rules = cardRules();
+  if (!rules.public && !rules.share) return '';
   const pub = cards.filter((c) => cardState(c.id).public);
   const toMe = cards.filter((c) => {
     const st = cardState(c.id);
@@ -496,57 +589,46 @@ function placesPanel() {
     return `<div class="place ${mineHere ? 'here' : ''}">
       <div class="place-head"><strong>${esc(rm.name)}</strong><span class="small muted">${rm.cap ? `${here.length}/${rm.cap}명` : `${here.length}명`}</span></div>
       ${rm.note ? `<span class="small muted">${esc(rm.note)}</span>` : ''}
-      ${here.length ? `<div class="chips">${here.map((p) => `<span class="chip">${esc(p.name)}</span>`).join('')}</div>` : ''}
+      ${here.length ? `<div class="chips">${here.map((p) => `<span class="chip">${avatar(p.id, 'xs')}${esc(p.name)}</span>`).join('')}</div>` : ''}
       ${mineHere ? '<span class="small" style="color:var(--brass)">지금 여기 있어요</span>'
         : `<button class="btn ghost sm" data-act="move" data-id="${rm.id}" ${full ? 'disabled' : ''}>${full ? '꽉 찼어요' : '여기로 이동'}</button>`}
     </div>`;
   }).join('')}</div></div>`;
 }
 
-function playersPanel() {
-  const m = meta();
-  const state = (p) => {
-    if (m.phase === 'play') return p.skip === m.round ? '건너뜀' : '';
-    if (m.phase === 'vote') return p.gm ? '' : p.vote ? '투표함' : '고민 중';
-    return '';
-  };
-  return `<div class="panel"><h3>참가자</h3><ul class="plist">${players().map((p) => `<li class="${p.id === S.pid ? 'me' : ''}">
-    <span class="dot ${p.online ? 'on' : ''}"></span>
-    <span class="pname">${esc(p.name)}</span>${p.id === hostId() ? '<span class="host-tag">방장</span>' : ''}
-    <span class="pchar">${p.gm ? '진행자' : esc(charOf(p.char)?.name || '')}</span>
-    <span class="pstate muted">${esc(state(p))}</span>
-  </li>`).join('')}</ul></div>`;
-}
-
 function logPanel() {
   const items = Object.values(S.room?.log || {}).sort((a, b) => b.t - a.t).slice(0, 40);
-  return `<div class="panel"><h3>기록</h3><ul class="log">${items.map((l) => `<li><time>${clock(l.t)}</time>${esc(l.m)}</li>`).join('') || '<li>아직 기록이 없어요.</li>'}</ul></div>`;
+  return `<details class="panel log-panel"><summary>기록 ${items.length ? `<span class="muted small">${items.length}</span>` : ''}</summary><ul class="log">${items.map((l) => `<li><time>${clock(l.t)}</time>${esc(l.m)}</li>`).join('') || '<li>아직 기록이 없어요.</li>'}</ul></details>`;
 }
 
 /* 투표와 결과 */
 function voteView() {
   const t = S.theme;
   const v = t.vote || {};
+  const m = meta();
   const act = actors();
   const mine = me();
   const voted = act.filter((p) => p.vote).length;
   const finalC = v.final ? charOf(v.final) : null;
-  const rule = finalC && holderOf(finalC.id) ? `${finalC.name}의 표가 최종 결정이 돼요.` : '가장 많은 표를 받은 쪽으로 결정돼요.';
+  const rule = finalC && holderOf(finalC.id) ? `${finalC.name}의 표가 최종 결정이 돼요.` : v.runoff ? '가장 많은 표를 받은 사람이 지목돼요. 동점이면 결선 투표를 해요.' : '가장 많은 표를 받은 쪽으로 결정돼요.';
+  const options = m.runoff ? t.characters.filter((c) => m.runoff.includes(c.id)) : t.characters;
   return `
   <section class="round-head">${stepsBar(t.rounds.length)}</section>
   <section class="phase-head">
-    <p class="eyebrow">최종 투표 · ${voted}/${act.length}명 투표함</p>
-    <h2>범인은 누구일까요?</h2>
+    <p class="eyebrow">${m.runoff ? '결선 투표' : '최종 투표'} · ${voted}/${act.length}명 투표함</p>
+    <h2>${m.runoff ? '동점이에요. 한 번 더!' : '범인은 누구일까요?'}</h2>
     <p class="desc">${mine.gm ? '진행자는 투표하지 않아요.' : '한 명을 고르세요. 모두 투표하기 전까지는 바꿀 수 있어요.'} ${esc(rule)}</p>
   </section>
   ${mine.gm ? '' : `<div class="vote-grid">
-    ${t.characters.map((c) => `<button class="vote-btn ${mine.vote === c.id ? 'mine' : ''}" data-act="vote" data-id="${c.id}">
-      <strong>${esc(c.name)}</strong><span>${esc(holderOf(c.id)?.name || '아무도 맡지 않음')}</span></button>`).join('')}
-    ${v.allowNone ? `<button class="vote-btn ${mine.vote === 'none' ? 'mine' : ''}" data-act="vote" data-id="none"><strong>${esc(v.noneLabel || '범인 없음')}</strong><span>사건이 아니라고 봐요</span></button>` : ''}
+    ${options.map((c) => `<button class="vote-btn ${mine.vote === c.id ? 'mine' : ''}" data-act="vote" data-id="${c.id}">
+      ${c.img ? `<img src="${esc(imgUrl(c.img))}" alt="" loading="lazy">` : ''}
+      <span class="vote-text"><strong>${esc(c.name)}</strong><span>${esc(holderOf(c.id)?.name || '아무도 맡지 않음')}</span></span>
+      ${mine.vote === c.id ? '<span class="stamp">지목</span>' : ''}</button>`).join('')}
+    ${v.allowNone && !m.runoff ? `<button class="vote-btn none ${mine.vote === 'none' ? 'mine' : ''}" data-act="vote" data-id="none"><span class="vote-text"><strong>${esc(v.noneLabel || '범인 없음')}</strong><span>사건이 아니라고 봐요</span></span>${mine.vote === 'none' ? '<span class="stamp">선택</span>' : ''}</button>` : ''}
   </div>`}
   <div class="play-layout">
-    <div class="play-main"><div class="docs">${docButtons()}</div></div>
-    <aside class="side">${playersPanel()}${logPanel()}</aside>
+    <div class="play-main">${docsPanel()}</div>
+    <aside class="side">${logPanel()}</aside>
   </div>`;
 }
 
@@ -558,43 +640,112 @@ function verdict() {
   const tally = {};
   act.forEach((p) => { if (p.vote) tally[p.vote] = (tally[p.vote] || 0) + 1; });
   const finalP = v.final ? act.find((p) => p.char === v.final && p.vote) : null;
-  if (finalP) return { text: label(finalP.vote), how: `${charOf(v.final).name}의 표로 결정`, label };
+  if (finalP) return { id: finalP.vote, text: label(finalP.vote), how: `${charOf(v.final).name}의 표로 결정`, label, tally };
   const max = Math.max(0, ...Object.values(tally));
   const top = Object.keys(tally).filter((k) => tally[k] === max);
-  if (top.length === 1) return { text: label(top[0]), how: `최다 득표 ${max}표`, label };
-  return { text: '결정하지 못했어요', how: top.length ? `동점: ${top.map(label).join(', ')}` : '투표 없음', label };
+  if (top.length === 1) return { id: top[0], text: label(top[0]), how: `최다 득표 ${max}표`, label, tally, top };
+  return { id: null, text: '결정하지 못했어요', how: top.length ? `동점: ${top.map(label).join(', ')}` : '투표 없음', label, tally, top };
 }
 
 function endView() {
   const t = S.theme;
   const act = actors();
   const vd = verdict();
+  const vc = vd.id && charOf(vd.id);
   const truth = t.culprit ? charOf(t.culprit) : null;
   const docs = isPdf(t) ? [
-    t.files?.ending ? docBtn('ending', '엔딩', '먼저 함께 읽어 보세요', true) : '',
-    t.files?.gm ? docBtn('gm', 'GM 자료', '해설') : '',
-    docBtn('overview', '개요', '모두 공개'),
-    ...t.characters.filter((c) => c.file).map((c) => docBtn(`char:${c.id}`, c.name, '핸드아웃')),
+    ...(t.docs || []).filter((d) => d.show === 'end' || d.show === 'gm').map((d) => docTile(`d:${d.id}`, d.title, '이제 볼 수 있어요', d.id === 'ending' || d.id === 'epilogue')),
+    ...(t.docs || []).filter((d) => d.show !== 'end' && d.show !== 'gm').map((d) => docTile(`d:${d.id}`, d.title, '모두 공개', false)),
+    ...t.characters.flatMap((c) => (c.docs || []).map((d, i) => docTile(`c:${c.id}:${i}`, `${c.name} · ${d.title}`, '핸드아웃', false))),
+    ...t.characters.flatMap((c) => (c.endDocs || []).map((d, i) => docTile(`e:${c.id}:${i}`, `${c.name} · ${d.title}`, me().char === c.id ? '내 기념 카드' : '기념 카드', me().char === c.id))),
   ].join('') : '';
   return `
   <section class="round-head">${stepsBar(t.rounds.length + 1)}</section>
-  <section class="phase-head">
-    <p class="eyebrow">결과 · 여러분이 지목한 쪽은</p>
-    <p class="verdict">${esc(vd.text)}</p>
-    <p class="small muted">${esc(vd.how)}</p>
+  <section class="verdict-box">
+    ${vc?.img ? `<span class="verdict-photo"><img src="${esc(imgUrl(vc.img))}" alt=""><span class="stamp big">지목</span></span>` : ''}
+    <div>
+      <p class="eyebrow">결과 · 여러분이 지목한 쪽은</p>
+      <p class="verdict">${esc(vd.text)}</p>
+      <p class="small muted">${esc(vd.how)}${vc && holderOf(vc.id) ? ` · ${esc(holderOf(vc.id).name)}님` : ''}</p>
+      ${t.endNote ? `<p class="desc" style="margin-top:10px">${esc(t.endNote)}</p>` : ''}
+    </div>
   </section>
   <div class="play-layout">
     <div class="play-main result">
       <div class="tbl-wrap"><table class="votes"><thead><tr><th>플레이어</th><th>캐릭터</th><th>투표</th></tr></thead>
         <tbody>${act.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(charOf(p.char)?.name || '')}</td><td>${esc(p.vote ? vd.label(p.vote) : '-')}</td></tr>`).join('')}</tbody></table></div>
-      ${isPdf(t) ? `<div><p class="muted" style="margin-bottom:10px">이제 모든 자료를 볼 수 있어요.</p><div class="docs">${docs}</div></div>` : `
+      ${isPdf(t) ? `<div><p class="eyebrow">모든 자료</p><div class="docs">${docs}</div></div>` : `
         <div class="panel"><p class="eyebrow">진상</p><h3 style="margin:6px 0 12px">진범은 ${esc(truth?.name || '?')}</h3><p class="story">${esc(t.solution || '')}</p></div>
         <div class="panel"><p class="eyebrow">모두의 비밀</p>${t.characters.map((c) => `<div style="margin-top:14px"><h4>${esc(c.name)}</h4><p class="story small">${esc(c.secret || '')}</p></div>`).join('')}</div>
         ${t.cards?.length ? `<section class="table"><div class="table-head"><h3>모든 단서</h3></div><div class="loc-cards">${t.cards.map((c) => faceCard(c)).join('')}</div></section>` : ''}`}
       <div class="btn-row"><button class="btn ghost" data-act="leave">홈으로</button></div>
     </div>
-    <aside class="side">${playersPanel()}${logPanel()}</aside>
+    <aside class="side">${logPanel()}</aside>
   </div>`;
+}
+
+/* ---------- 관계도 ---------- */
+function relationsSVG() {
+  const t = S.theme;
+  const R = t.relations;
+  if (!R) return '';
+  const W = R.width || 1000;
+  const nodes = new Map();
+  const person = (id) => {
+    const c = charOf(id);
+    const p = (R.people || []).find((x) => x.id === id) || {};
+    return { id, name: p.name || c?.name || id, sub: p.sub || c?.sub || '', note: p.note ?? c?.note ?? '', img: p.img || c?.img || '', place: !!p.place, victim: !!p.victim, isChar: !!c, x: p.x, y: p.y };
+  };
+  let lines = '';
+  let labels = '';
+  const tag = (x, y, text, cls = '') => {
+    const w = [...text].length * 17 + 22;
+    return `<g class="rel-tag ${cls}"><rect x="${x - w / 2}" y="${y - 17}" width="${w}" height="34" rx="17"></rect><text x="${x}" y="${y + 6}">${esc(text)}</text></g>`;
+  };
+  if (R.tree) {
+    const parents = R.tree.parents.map(person);
+    const kids = R.tree.children.filter((id) => charOf(id)).map(person);
+    const gap = W / kids.length;
+    kids.forEach((k, i) => { k.x = gap * (i + 0.5); k.y = 470; });
+    parents.forEach((p, i) => { p.x = W / 2 + (i === 0 ? -190 : 190); p.y = 110; });
+    [...parents, ...kids].forEach((n) => nodes.set(n.id, n));
+    const busY = 330;
+    lines += `<path class="rel-line" d="M${parents[0].x} 110 H${parents[1].x} M${W / 2} 110 V${busY} M${kids[0].x} ${busY} H${kids[kids.length - 1].x} ${kids.map((k) => `M${k.x} ${busY} V${k.y - 60}`).join(' ')}"></path>`;
+    if (R.tree.parentsLabel) labels += tag(W / 2, 110, R.tree.parentsLabel);
+    labels += tag(W / 2, busY, '자녀');
+  } else {
+    (R.people || []).forEach((p) => nodes.set(p.id, person(p.id)));
+    (R.groups || []).forEach((g) => {
+      lines += `<rect class="rel-group" x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="22"></rect><text class="rel-group-label" x="${g.x + 22}" y="${g.y + 34}">${esc(g.label)}</text>`;
+    });
+    (R.links || []).forEach((l) => {
+      const a = nodes.get(l.a);
+      const b = nodes.get(l.b);
+      if (!a || !b) return;
+      const at = l.at ?? 0.5;
+      lines += `<line class="rel-line" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"></line>`;
+      if (l.label) labels += tag(a.x + (b.x - a.x) * at, a.y + (b.y - a.y) * at, l.label);
+    });
+  }
+  const all = [...nodes.values()];
+  const H = Math.max(...all.map((n) => n.y)) + 170;
+  const nodeSvg = all.map((n, i) => {
+    const holder = n.isChar ? holderOf(n.id) : null;
+    const r = 56;
+    const shape = n.place
+      ? `<rect class="rel-place" x="${n.x - r}" y="${n.y - r * 0.7}" width="${r * 2}" height="${r * 1.4}" rx="14"></rect><text class="rel-place-text" x="${n.x}" y="${n.y + 9}">${esc(n.name)}</text>`
+      : `<clipPath id="rc${i}"><circle cx="${n.x}" cy="${n.y}" r="${r}"></circle></clipPath>
+         <circle class="rel-ring ${n.victim ? 'victim' : ''} ${holder?.id === S.pid ? 'mine' : ''}" cx="${n.x}" cy="${n.y}" r="${r + 5}"></circle>
+         ${n.img ? `<image href="${esc(imgUrl(n.img))}" x="${n.x - r}" y="${n.y - r}" width="${r * 2}" height="${r * 2}" clip-path="url(#rc${i})" preserveAspectRatio="xMidYMid slice"></image>` : `<circle cx="${n.x}" cy="${n.y}" r="${r}" class="rel-blank"></circle>`}`;
+    const nameY = n.place ? n.y + r * 0.7 + 30 : n.y + r + 34;
+    return `<g class="rel-node"><title>${esc([n.name, n.sub, n.note].filter(Boolean).join(' · '))}</title>${shape}
+      ${n.place ? '' : `<text class="rel-name" x="${n.x}" y="${nameY}">${esc(n.name)}</text>`}
+      <text class="rel-sub" x="${n.x}" y="${nameY + (n.place ? 0 : 26)}">${esc(n.place ? n.sub : n.sub)}</text>
+      ${n.isChar ? `<text class="rel-player ${holder ? '' : 'none'}" x="${n.x}" y="${nameY + (n.place ? 26 : 52)}">${esc(holder ? `플레이어: ${holder.name}` : '아무도 맡지 않음')}</text>` : ''}
+      ${!n.isChar && n.note ? `<text class="rel-note" x="${n.x}" y="${nameY + 52}">${esc(n.note)}</text>` : ''}
+    </g>`;
+  }).join('');
+  return `<svg class="rel-svg" viewBox="-60 0 ${W + 120} ${H}" role="img" aria-label="${esc(t.title)} 캐릭터 관계도">${lines}${labels}${nodeSvg}</svg>`;
 }
 
 /* ---------- 모달 ---------- */
@@ -618,9 +769,11 @@ function renderModal() {
   if (sig === S.modalSig) return;
   S.modalSig = sig;
   wrap.hidden = false;
+  box.classList.toggle('wide', S.modal.type === 'relations');
   if (S.modal.type === 'card') box.innerHTML = cardModal();
   else if (S.modal.type === 'sheet') box.innerHTML = sheetModal(S.modal.id);
   else if (S.modal.type === 'intro') box.innerHTML = introModal();
+  else if (S.modal.type === 'relations') box.innerHTML = `<div class="modal-head"><div><p class="eyebrow">모두 공개된 정보만 담았어요</p><h3>캐릭터 관계도</h3></div>${closeBtn}</div><div class="rel-wrap">${relationsSVG()}</div>`;
   S.modal.fresh = false;
 }
 
@@ -631,41 +784,44 @@ function cardModal() {
   const c = cardOf(id);
   const st = cardState(id);
   const mine = st.owner === S.pid;
+  const rules = cardRules();
   const others = players().filter((p) => p.id !== S.pid && !p.gm);
   const sharedNames = Object.keys(st.shared || {}).filter((k) => st.shared[k]).map(who);
   const status = st.public ? '전체 공개된 카드예요.'
     : mine ? (sharedNames.length ? `보여준 사람: ${sharedNames.join(', ')}` : '아직 아무에게도 보여주지 않았어요.')
       : st.owner ? `${who(st.owner)}님의 카드예요.` : '';
-  const live = ['play', 'vote'].includes(meta().phase);
+  const live = ['play', 'vote'].includes(phase());
   let actions = '';
   if (mine && live) {
     if (S.modal.mode === 'share') {
       const cand = others.filter((p) => !st.shared?.[p.id]);
       actions = `<form id="f-share" class="sheet">
         <p class="small muted">보여줄 사람을 고르세요. 한 번 보여준 카드는 되돌릴 수 없어요.</p>
-        <div class="checks">${cand.map((p) => `<label><input type="checkbox" name="to" value="${p.id}"> ${esc(who(p.id))}</label>`).join('') || '<p class="small muted">더 보여줄 사람이 없어요.</p>'}</div>
+        <div class="checks">${cand.map((p) => `<label><input type="checkbox" name="to" value="${p.id}"> ${avatar(p.id, 'xs')} ${esc(who(p.id))}</label>`).join('') || '<p class="small muted">더 보여줄 사람이 없어요.</p>'}</div>
         <div class="btn-row"><button class="btn" type="submit" ${cand.length ? '' : 'disabled'}>보여주기</button><button class="btn ghost" type="button" data-act="card-mode">취소</button></div>
       </form>`;
     } else if (S.modal.mode === 'give') {
       actions = `<form id="f-give" class="sheet">
         <p class="small muted">누구에게 넘겨줄까요?</p>
-        <div class="checks">${others.map((p) => `<label><input type="radio" name="to" value="${p.id}" required> ${esc(who(p.id))}</label>`).join('')}</div>
+        <div class="checks">${others.map((p) => `<label><input type="radio" name="to" value="${p.id}" required> ${avatar(p.id, 'xs')} ${esc(who(p.id))}</label>`).join('')}</div>
         <p class="warn">넘겨주면 이 카드는 더 이상 볼 수 없어요.</p>
         <div class="btn-row"><button class="btn" type="submit">넘겨주기</button><button class="btn ghost" type="button" data-act="card-mode">취소</button></div>
       </form>`;
-    } else {
+    } else if (rules.public || rules.share || rules.give) {
       actions = `<div class="btn-row">
-        <button class="btn" data-act="card-public" ${st.public ? 'disabled' : ''}>전체 공개</button>
-        <button class="btn ghost" data-act="card-mode" data-mode="share" ${st.public ? 'disabled' : ''}>몇 명에게만 보여주기</button>
-        <button class="btn ghost" data-act="card-mode" data-mode="give" ${others.length ? '' : 'disabled'}>넘겨주기</button>
+        ${rules.public ? `<button class="btn" data-act="card-public" ${st.public ? 'disabled' : ''}>전체 공개</button>` : ''}
+        ${rules.share ? `<button class="btn ghost" data-act="card-mode" data-mode="share" ${st.public ? 'disabled' : ''}>몇 명에게만 보여주기</button>` : ''}
+        ${rules.give ? `<button class="btn ghost" data-act="card-mode" data-mode="give" ${others.length ? '' : 'disabled'}>넘겨주기</button>` : ''}
       </div>`;
     }
+    if (rules.note) actions += `<p class="small muted">${esc(rules.note)}</p>`;
   }
-  return `<div class="modal-head"><p class="eyebrow">단서 카드</p>${closeBtn}</div>
+  return `<div class="modal-head"><p class="eyebrow">${c.file ? '수색 시트' : '단서 카드'}</p>${closeBtn}</div>
     <article class="paper-card" style="${S.modal.fresh ? '' : 'animation:none'}">
-      <span class="mcard-loc">${esc(cardTag(c))}</span>
+      <span class="mcard-loc">${esc(locName(c.location))}${c.back && c.file ? ` · ${esc(c.back)}` : ''}</span>
       <h3>${esc(c.title)}</h3>
-      <div class="body">${esc(c.text)}</div>
+      ${c.text ? `<div class="body">${esc(c.text)}</div>` : ''}
+      ${c.file ? `<button class="btn" data-act="doc" data-file="k:${esc(c.id)}">시트 열기</button>` : ''}
     </article>
     <p class="small muted">${esc(status)}</p>
     ${actions}`;
@@ -673,10 +829,10 @@ function cardModal() {
 
 function sheetModal(charId) {
   const c = charOf(charId);
-  const allowed = me().char === charId || isGM() || meta().phase === 'end';
+  const allowed = me().char === charId || isGM() || phase() === 'end';
   if (!c || !allowed) return `<div class="modal-head"><h3>볼 수 없어요</h3>${closeBtn}</div>`;
   const sec = (title, body) => (body ? `<section><h4>${title}</h4><div class="body">${esc(body)}</div></section>` : '');
-  return `<div class="modal-head"><div><p class="eyebrow">캐릭터 시트 · 비공개</p><h3>${esc(c.name)} <span class="muted small">${esc(c.sub || '')}</span></h3></div>${closeBtn}</div>
+  return `<div class="modal-head"><div class="sheet-id">${c.img ? `<img src="${esc(imgUrl(c.img))}" alt="">` : ''}<div><p class="eyebrow">캐릭터 시트 · 비공개</p><h3>${esc(c.name)} <span class="muted small">${esc(c.sub || '')}</span></h3></div></div>${closeBtn}</div>
     <div class="sheet">
       ${sec('모두가 아는 모습', c.public)}
       ${sec('나만 아는 비밀', c.secret)}
@@ -690,27 +846,196 @@ function introModal() {
   return `<div class="modal-head"><div><p class="eyebrow">사건 개요 · 모두 공개</p><h3>${esc(t.title)}</h3></div>${closeBtn}</div>
     <div class="sheet">
       <div class="body">${esc(t.intro || t.summary || '')}</div>
-      <section><h4>등장인물</h4>${t.characters.map((c) => `<p><strong>${esc(c.name)}</strong> <span class="muted small">${esc(c.sub || '')}</span><br><span class="small">${esc(c.public || c.note || '')}</span></p>`).join('')}</section>
+      <section><h4>등장인물</h4>${t.characters.map((c) => `<p class="intro-char">${c.img ? `<img src="${esc(imgUrl(c.img))}" alt="">` : ''}<span><strong>${esc(c.name)}</strong> <span class="muted small">${esc(c.sub || '')}</span><br><span class="small">${esc(c.public || c.note || '')}</span></span></p>`).join('')}</section>
     </div>`;
 }
 
-/* ---------- PDF 자료 ---------- */
-function docInfo(key) {
-  const t = S.theme;
-  if (key.startsWith('char:')) {
-    const c = charOf(key.slice(5));
-    return c?.file ? { path: c.file, title: `${c.name} 핸드아웃` } : null;
+/* ---------- 밀담 ---------- */
+const hasTalk = () => !!S.theme?.rounds.some((r) => r.talk);
+const talkOpen = () => phase() === 'play' && !!S.theme.rounds[roundNo()]?.talk;
+const talkMax = () => S.theme.talkMax || 3;
+const msgsOf = (th) => Object.entries(th?.msgs || {}).map(([k, m]) => ({ k, ...m })).sort((a, b) => a.t - b.t);
+const lastT = (th) => { const ms = msgsOf(th); return ms.length ? ms[ms.length - 1].t : th.t || 0; };
+const myThreads = () => Object.entries(S.room?.chats || {})
+  .filter(([, th]) => th?.members?.[S.pid])
+  .map(([id, th]) => ({ id, ...th }))
+  .sort((a, b) => lastT(b) - lastT(a));
+const readKey = () => `mm:read:${S.code}:${S.pid}`;
+const readMap = () => safe(() => JSON.parse(lGet(readKey()))) || {};
+const unreadOf = (th) => { const r = readMap()[th.id] || 0; return msgsOf(th).filter((m) => m.p !== S.pid && m.t > r).length; };
+function markRead(th) {
+  const map = readMap();
+  map[th.id] = lastT(th);
+  lSet(readKey(), JSON.stringify(map));
+}
+const memberNames = (th) => Object.keys(th.members || {}).filter((id) => id !== S.pid).map(who).join(', ');
+
+function renderChat() {
+  const fab = $('#chat-fab');
+  const box = $('#chat');
+  const show = S.view === 'room' && hasTalk() && phase() !== 'select';
+  fab.hidden = !show || S.chat.open;
+  box.hidden = !show || !S.chat.open;
+  if (!show) return;
+  const threads = myThreads();
+  const unread = threads.reduce((s, th) => s + unreadOf(th), 0);
+  const badge = fab.querySelector('.badge');
+  badge.textContent = unread;
+  badge.hidden = !unread;
+  fab.classList.toggle('live', talkOpen());
+  if (unread > S.chat.unread && !S.chat.open) toast('밀담 메시지가 왔어요.');
+  S.chat.unread = unread;
+  if (!S.chat.open) return;
+
+  const th = S.chat.tid ? threads.find((x) => x.id === S.chat.tid) : null;
+  if (S.chat.view === 'thread' && !th) S.chat.view = 'list';
+  const sig = JSON.stringify([S.chat.view, S.chat.tid, S.chat.picks, talkOpen(), S.chat.view === 'thread' ? th : threads.map((x) => [x.id, lastT(x), unreadOf(x)]), players().map((p) => [p.id, p.name, p.char])]);
+  if (sig === S.chat.sig) return;
+  S.chat.sig = sig;
+
+  const head = $('.chat-head', box);
+  const body = $('.chat-body', box);
+  const form = $('#f-chat');
+  const close = '<button class="btn ghost sm" data-act="chat-close" aria-label="밀담 닫기">닫기</button>';
+  const back = '<button class="btn ghost sm" data-act="chat-view" data-view="list">목록</button>';
+  form.hidden = S.chat.view !== 'thread';
+
+  if (S.chat.view === 'list') {
+    head.innerHTML = `<strong>밀담</strong>${close}`;
+    body.innerHTML = `
+      <p class="chat-note">${talkOpen() ? `최대 ${talkMax()}명까지 따로 이야기할 수 있어요. 대화에 없는 사람에게는 보이지 않아요.` : '지금은 밀담 단계가 아니에요. 지난 대화는 볼 수 있어요.'}</p>
+      <button class="btn sm" data-act="chat-view" data-view="new" ${talkOpen() ? '' : 'disabled'}>새 밀담</button>
+      <ul class="thread-list">${threads.map((x) => {
+        const last = msgsOf(x).pop();
+        const n = unreadOf(x);
+        return `<li><button data-act="chat-open" data-id="${esc(x.id)}">
+          <span class="ava-stack">${Object.keys(x.members).filter((id) => id !== S.pid).map((id) => avatar(id, 'sm')).join('')}</span>
+          <span class="thread-text"><strong>${esc(memberNames(x))}</strong><span>${esc(last ? `${last.p === S.pid ? '나: ' : ''}${last.m}` : '아직 메시지가 없어요')}</span></span>
+          ${n ? `<span class="badge">${n}</span>` : ''}
+        </button></li>`;
+      }).join('') || '<li class="muted small">아직 밀담이 없어요.</li>'}</ul>`;
+  } else if (S.chat.view === 'new') {
+    const others = players().filter((p) => p.id !== S.pid);
+    const full = S.chat.picks.length >= talkMax() - 1;
+    head.innerHTML = `${back}<strong>누구와 이야기할까요?</strong>`;
+    body.innerHTML = `
+      <p class="chat-note">나를 포함해 최대 ${talkMax()}명 · ${talkMax() - 1}명까지 고를 수 있어요.</p>
+      <div class="pick-list">${others.map((p) => {
+        const on = S.chat.picks.includes(p.id);
+        return `<button class="pick ${on ? 'on' : ''}" data-act="chat-pick" data-id="${p.id}" ${!on && full ? 'disabled' : ''}>${avatar(p.id, 'sm')}<span>${esc(who(p.id))}</span></button>`;
+      }).join('')}</div>
+      <button class="btn" data-act="chat-start" ${S.chat.picks.length ? '' : 'disabled'}>밀담 시작</button>`;
+  } else {
+    head.innerHTML = `${back}<span class="ava-stack">${Object.keys(th.members).filter((id) => id !== S.pid).map((id) => avatar(id, 'sm')).join('')}</span><strong class="thread-title">${esc(memberNames(th))}</strong>`;
+    const ms = msgsOf(th);
+    body.innerHTML = ms.length ? ms.map((m) => `<div class="msg ${m.p === S.pid ? 'mine' : ''}">
+        ${m.p === S.pid ? '' : avatar(m.p, 'sm')}
+        <div class="bubble">${m.p === S.pid ? '' : `<span class="msg-who">${esc(who(m.p))}</span>`}${esc(m.m)}<time>${clock(m.t)}</time></div>
+      </div>`).join('') : '<p class="chat-note">첫 메시지를 보내 보세요.</p>';
+    body.scrollTop = body.scrollHeight;
+    markRead(th);
+    const input = $('#chat-input');
+    input.disabled = !talkOpen();
+    input.placeholder = talkOpen() ? '메시지 입력' : '지금은 밀담 단계가 아니에요';
+    $('#f-chat button').disabled = !talkOpen();
   }
-  const titles = { overview: '개요', ending: '엔딩', gm: 'GM 자료' };
-  return t.files?.[key] ? { path: t.files[key], title: titles[key] || key } : null;
 }
 
-function canOpenDoc(key) {
-  const m = meta();
-  if (key === 'overview') return true;
-  if (m.phase === 'select') return false;
-  if (m.phase === 'end' || isGM()) return true;
-  return key.startsWith('char:') && me().char === key.slice(5);
+async function startChat() {
+  if (!talkOpen()) throw new Error('지금은 밀담 단계가 아니에요.');
+  const ids = [S.pid, ...S.chat.picks].sort();
+  if (ids.length > talkMax()) throw new Error(`밀담은 최대 ${talkMax()}명까지예요.`);
+  const tid = `t-${ids.join('-')}`;
+  if (!S.room?.chats?.[tid]) {
+    await S.store.set(roomPath(`chats/${tid}`), { members: Object.fromEntries(ids.map((id) => [id, true])), by: S.pid, t: S.store.now() });
+  }
+  Object.assign(S.chat, { view: 'thread', tid, picks: [], sig: null });
+  renderChat();
+  $('#chat-input')?.focus();
+}
+
+async function sendChat(text) {
+  const m = text.trim().slice(0, 500);
+  if (!m) return;
+  if (!talkOpen()) throw new Error('지금은 밀담 단계가 아니에요.');
+  const input = $('#chat-input');
+  input.value = '';
+  await S.store.push(roomPath(`chats/${S.chat.tid}/msgs`), { p: S.pid, t: S.store.now(), m });
+}
+
+/* ---------- 연출 ---------- */
+let curtainTimer;
+function curtain(kicker, title, sub = '', img = '') {
+  const el = $('#curtain');
+  $('.curtain-kicker', el).textContent = kicker;
+  $('.curtain-title', el).textContent = title;
+  $('.curtain-sub', el).textContent = sub;
+  const pic = $('.curtain-img', el);
+  pic.hidden = !img;
+  if (img) pic.src = img;
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(curtainTimer);
+  curtainTimer = setTimeout(() => { el.hidden = true; el.classList.remove('show'); }, img ? 3600 : 2300);
+}
+
+function announce(m) {
+  const { phase: ph, round, runoff } = S.seen;
+  S.seen = { phase: m.phase, round: m.round, runoff: !!m.runoff };
+  if (m.phase === 'vote' && m.runoff && !runoff) {
+    curtain('결선 투표', '동점이에요. 한 번 더!', m.runoff.map((id) => charOf(id)?.name).join(' · '));
+    return;
+  }
+  if (ph === m.phase && round === m.round) return;
+  const t = S.theme;
+  if (m.phase === 'play') {
+    const r = t.rounds[m.round];
+    curtain(ph === 'select' ? '게임 시작' : `${m.round + 1}단계`, r?.name || '', r?.talk ? '밀담할 수 있어요' : '');
+  } else if (m.phase === 'vote') {
+    curtain('최종 투표', '범인은 누구일까요?');
+  } else if (m.phase === 'end') {
+    const vd = verdict();
+    const c = vd.id && charOf(vd.id);
+    curtain('지목된 사람은…', vd.text, vd.how, c?.img ? imgUrl(c.img) : '');
+  }
+}
+
+/* ---------- PDF·이미지 자료 ---------- */
+function docInfo(key) {
+  const t = S.theme;
+  const [kind, a, b] = key.split(':');
+  if (kind === 'd') { const d = t.docs?.find((x) => x.id === a); return d?.file ? { path: d.file, title: d.title } : null; }
+  if (kind === 'k') { const c = cardOf(a); return c?.file ? { path: c.file, title: `수색 시트 · ${c.title}` } : null; }
+  const c = charOf(a);
+  if (!c) return null;
+  if (kind === 'v') return c.cover ? { path: c.cover, title: `${c.name} 표지` } : null;
+  if (kind === 'c') { const d = c.docs?.[+b]; return d?.file ? { path: d.file, title: `${c.name} · ${d.title}` } : null; }
+  if (kind === 'e') { const d = c.endDocs?.[+b]; return d?.file ? { path: d.file, title: `${c.name} · ${d.title}` } : null; }
+  return null;
+}
+
+function canOpen(key) {
+  const [kind, a, b] = key.split(':');
+  const end = phase() === 'end';
+  const started = phase() !== 'select';
+  if (kind === 'd') {
+    const d = S.theme.docs?.find((x) => x.id === a);
+    if (!d) return false;
+    if (d.show === 'always') return true;
+    if (d.show === 'play') return reached(d.from || 0) || (isGM() && started);
+    if (d.show === 'gm') return end || (isGM() && started);
+    return end;
+  }
+  if (kind === 'v') return true;
+  if (kind === 'c') {
+    const d = charOf(a)?.docs?.[+b];
+    return !!d && (end || (isGM() && started) || (me().char === a && reached(d.from || 0)));
+  }
+  if (kind === 'e') return end;
+  if (kind === 'k') return canSee(a);
+  return false;
 }
 
 async function loadFile(path) {
@@ -726,21 +1051,29 @@ async function loadFile(path) {
   return buf;
 }
 
+const sniff = (buf) => {
+  const u = new Uint8Array(buf, 0, 4);
+  if (u[0] === 0xff && u[1] === 0xd8) return 'jpg';
+  if (u[0] === 0x89 && u[1] === 0x50) return 'png';
+  return 'pdf';
+};
+const mimeOf = (kind) => ({ pdf: 'application/pdf', jpg: 'image/jpeg', png: 'image/png' }[kind]);
+
 async function openDoc(key) {
-  if (!canOpenDoc(key)) throw new Error('지금은 볼 수 없는 자료예요.');
+  if (!canOpen(key)) throw new Error('지금은 볼 수 없는 자료예요.');
   const d = docInfo(key);
   if (!d) throw new Error('자료 파일이 없어요.');
-  S.doc.file = d.path;
-  S.doc.title = d.title;
-  S.doc.bytes = null;
+  Object.assign(S.doc, { file: d.path, title: d.title, bytes: null });
   $('#docpane').hidden = false;
   $('.docpane-title').textContent = d.title;
+  $('.docpane-help').hidden = !(S.theme.lang && S.theme.lang !== 'ko');
   const pages = $('.docpane-pages');
   pages.innerHTML = '<p class="docpane-msg">자료를 여는 중…</p>';
   try {
     const bytes = await loadFile(d.path);
     if (S.doc.file !== d.path) return;
     S.doc.bytes = bytes;
+    S.doc.kind = sniff(bytes);
     await drawDoc();
   } catch (e) {
     pages.innerHTML = `<p class="docpane-msg">자료를 열지 못했어요. (${esc(e.message)})</p>`;
@@ -749,14 +1082,44 @@ async function openDoc(key) {
 
 async function drawDoc() {
   $('.docpane-zoom').textContent = `${Math.round(S.doc.zoom * 100)}%`;
-  if (S.doc.bytes) await renderPdf($('.docpane-pages'), S.doc.bytes, S.doc.zoom);
+  if (!S.doc.bytes) return;
+  const host = $('.docpane-pages');
+  if (S.doc.kind === 'pdf') { await renderPdf(host, S.doc.bytes, S.doc.zoom); return; }
+  const url = URL.createObjectURL(new Blob([S.doc.bytes], { type: mimeOf(S.doc.kind) }));
+  host.replaceChildren();
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = S.doc.title;
+  img.style.width = `${Math.min(900, host.clientWidth - 2) * S.doc.zoom}px`;
+  host.appendChild(img);
+}
+
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function saveDocImage() {
+  if (!S.doc.bytes) return;
+  const base = S.doc.title.replace(/[\\/:*?"<>|]/g, '_');
+  if (S.doc.kind !== 'pdf') { downloadBlob(new Blob([S.doc.bytes], { type: mimeOf(S.doc.kind) }), `${base}.${S.doc.kind}`); return; }
+  const canvases = [...document.querySelectorAll('.docpane-pages canvas')];
+  for (const [i, c] of canvases.entries()) {
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    downloadBlob(blob, canvases.length > 1 ? `${base}-${i + 1}.png` : `${base}.png`);
+  }
+  toast('이미지를 저장했어요. 구글 번역(이미지)이나 파파고 사진 번역에 넣어 보세요.');
 }
 
 function closeDoc() {
   $('#docpane').hidden = true;
   $('.docpane-pages').replaceChildren();
-  S.doc.file = null;
-  S.doc.bytes = null;
+  Object.assign(S.doc, { file: null, bytes: null });
 }
 
 /* ---------- 들어가기 / 나가기 ---------- */
@@ -764,16 +1127,18 @@ const newPlayer = (name, now, t) => ({
   name, joinedAt: now, char: null, gm: false, agree: 0, skip: -1, vote: null, online: true, loc: t.rooms?.[0]?.id || null,
 });
 
-async function createRoom(t, name, pw) {
-  if (!t) throw new Error('테마를 먼저 골라 주세요.');
+async function createRoom(base, name, pw, variant) {
+  if (!base) throw new Error('테마를 먼저 골라 주세요.');
   if (!name) throw new Error('이름을 적어 주세요.');
+  const t = resolveTheme(base, variant);
   let keyB64 = null;
-  if (t.lock) {
+  if (base.lock) {
     if (!pw) throw new Error('이 테마는 암호가 있어야 방을 만들 수 있어요.');
-    const key = await Lock.keyFromPassword(pw, t.lock);
-    if (!(await Lock.keyMatches(key, t.lock))) throw new Error('테마 암호가 맞지 않아요.');
+    const key = await Lock.keyFromPassword(pw, base.lock);
+    if (!(await Lock.keyMatches(key, base.lock))) throw new Error('테마 암호가 맞지 않아요.');
     keyB64 = await Lock.exportKey(key);
-    lSet(`mm:pw:${t.id}`, pw);
+    lSet(`mm:pw:${base.id}`, pw);
+    lSet('mm:pw', pw);
   }
   let code = null;
   for (let i = 0; i < 6 && !code; i++) {
@@ -790,10 +1155,10 @@ async function createRoom(t, name, pw) {
   const pid = newId();
   const now = S.store.now();
   await S.store.set(`rooms/${code}`, {
-    meta: { theme: t.id, createdAt: now, phase: 'select', round: 0, roundEndsAt: 0, selVer: 1, key: keyB64, host: pid },
+    meta: { theme: base.id, variant: t.variant || null, createdAt: now, phase: 'select', round: 0, roundEndsAt: 0, selVer: 1, key: keyB64, host: pid },
     players: { [pid]: newPlayer(name, now, t) },
   });
-  await S.store.set(`lobby/${code}`, { theme: t.id, createdAt: now, phase: 'select', count: 1 });
+  await S.store.set(`lobby/${code}`, { theme: base.id, createdAt: now, phase: 'select', count: 1 });
   await S.store.push(`rooms/${code}/log`, { t: now, m: `${name}님이 방을 만들었어요.` });
   lSet('mm:name', name);
   await enterRoom(code, pid);
@@ -819,8 +1184,9 @@ async function joinRoom(code, name, as = 'join') {
 async function joinOpened(code, name) {
   const room = await S.store.get(`rooms/${code}`);
   if (!room?.meta) throw new Error('그 코드의 방을 찾을 수 없어요.');
-  const t = S.byId[room.meta.theme];
-  if (!t) throw new Error('이 사이트에 없는 테마의 방이에요.');
+  const base = S.byId[room.meta.theme];
+  if (!base) throw new Error('이 사이트에 없는 테마의 방이에요.');
+  const t = resolveTheme(base, room.meta.variant);
   lSet('mm:name', name);
   const found = Object.entries(room.players || {}).find(([, p]) => p?.name === name);
   let pid;
@@ -839,15 +1205,18 @@ async function joinOpened(code, name) {
 
 async function enterRoom(code, pid) {
   const room = await S.store.get(`rooms/${code}`);
-  const t = room?.meta && S.byId[room.meta.theme];
-  if (!t || !room.players?.[pid]?.name) { sSet('mm:cur', null); return false; }
+  const base = room?.meta && S.byId[room.meta.theme];
+  if (!base || !room.players?.[pid]?.name) { sSet('mm:cur', null); return false; }
   S.unsub?.();
   S.cancelDisc?.();
-  Object.assign(S, { code, pid, theme: t, room, view: 'room', armed: null, modal: null });
+  const t = resolveTheme(base, room.meta.variant);
+  Object.assign(S, { code, pid, theme: t, room, view: 'room', armed: null, modal: null, conn: 'ok' });
   S.seen = { phase: room.meta.phase, round: room.meta.round };
+  S.dealt = new Set();
+  Object.assign(S.chat, { open: false, view: 'list', tid: null, picks: [], sig: null, unread: 0 });
   S.key = room.meta.key ? await Lock.importKey(room.meta.key) : null;
   S.files.clear();
-  S.conn = 'ok';
+  S.store.identify(pid);
   sSet('mm:cur', JSON.stringify({ code, pid, role: S.store.role }));
   lSet('mm:last', JSON.stringify({ code, name: room.players[pid].name, title: t.title, role: S.store.role }));
   history.replaceState(null, '', `?room=${code}`);
@@ -864,6 +1233,7 @@ function leaveView(msg) {
   S.cancelDisc?.();
   S.cancelDisc = null;
   Object.assign(S, { view: 'home', room: null, code: null, pid: null, theme: null, key: null, modal: null, armed: null, conn: 'ok' });
+  S.chat.open = false;
   S.store.close();
   closeDoc();
   sSet('mm:cur', null);
@@ -917,16 +1287,6 @@ function onRoom(v) {
   announce(v.meta);
   render();
   checkFlow();
-}
-
-function announce(m) {
-  const { phase, round } = S.seen;
-  S.seen = { phase: m.phase, round: m.round };
-  if (phase === m.phase && round === m.round) return;
-  if (m.phase === 'play' && phase === 'select') toast(`게임 시작! ${isPdf(S.theme) ? "'내 핸드아웃'을 열어 보세요." : "'내 캐릭터'를 확인하세요."}`);
-  else if (m.phase === 'play') toast(`'${S.theme.rounds[m.round]?.name}' 단계예요.`);
-  else if (m.phase === 'vote') toast('최종 투표 시간이에요.');
-  else if (m.phase === 'end') toast('결과가 나왔어요.');
 }
 
 /* ---------- 행동 ---------- */
@@ -1003,18 +1363,18 @@ async function take(id) {
   if (!res.committed) { render(); throw new Error('다른 사람이 먼저 가져갔어요.'); }
   S.arrived = id;
   setTimeout(() => { S.arrived = null; }, 900);
-  await log(`${who(S.pid)}님이 ${cardTag(cardOf(id))} 카드를 가져갔어요.`);
+  await log(`${who(S.pid)}님이 ${cardOf(id).back || cardTag(cardOf(id))} 카드를 가져갔어요.`);
   openModal({ type: 'card', id });
 }
 
 async function makePublic(id) {
-  if (cardState(id).owner !== S.pid) return;
+  if (cardState(id).owner !== S.pid || !cardRules().public) return;
   await S.store.update(roomPath(`cards/${id}`), { public: true });
   await log(`${who(S.pid)}님이 '${cardOf(id).title}' 카드를 전체 공개했어요.`);
 }
 
 async function shareCard(id, pids) {
-  if (cardState(id).owner !== S.pid) return;
+  if (cardState(id).owner !== S.pid || !cardRules().share) return;
   if (!pids.length) throw new Error('보여줄 사람을 골라 주세요.');
   const up = {};
   pids.forEach((p) => { up[`shared/${p}`] = true; });
@@ -1026,7 +1386,7 @@ async function shareCard(id, pids) {
 }
 
 async function giveCard(id, to) {
-  if (cardState(id).owner !== S.pid) return;
+  if (cardState(id).owner !== S.pid || !cardRules().give) return;
   if (!to) throw new Error('넘겨줄 사람을 골라 주세요.');
   await S.store.update(roomPath(`cards/${id}`), { owner: to, [`shared/${to}`]: null });
   closeModal();
@@ -1048,7 +1408,7 @@ async function copyLink() {
   }
 }
 
-/* ---------- 단계 넘기기 (조건을 본 사람 누구나 시도, 트랜잭션으로 한 번만) ---------- */
+/* ---------- 단계 넘기기 (조건을 본 사람이 시도, 트랜잭션으로 한 번만) ---------- */
 function once(key, fn) {
   if (S.pending.has(key)) return;
   S.pending.add(key);
@@ -1076,7 +1436,7 @@ function checkFlow() {
     if (timeUp || allSkip) once(`round:${m.round}`, () => advance(m.round, allSkip ? 'skip' : 'time'));
   } else if (m.phase === 'vote') {
     const act = actors();
-    if (act.length && act.every((p) => p.vote)) once('end', finishVote);
+    if (act.length && act.every((p) => p.vote)) once(`end:${m.runoffCount || 0}`, finishVote);
   }
 }
 
@@ -1106,9 +1466,19 @@ async function advance(from, reason) {
 }
 
 async function finishVote() {
-  const res = await S.store.transaction(roomPath('meta'), (m) => {
-    if (!m || m.phase !== 'vote') return undefined;
-    return { ...m, phase: 'end' };
+  const m = meta();
+  const vd = verdict();
+  // 동점이면 한 번 결선 투표
+  if (S.theme.vote?.runoff && !vd.id && vd.top?.length > 1 && !(m.runoffCount > 0) && vd.top.every((id) => id !== 'none')) {
+    const up = { 'meta/runoff': vd.top, 'meta/runoffCount': 1 };
+    actors().forEach((p) => { up[`players/${p.id}/vote`] = null; });
+    await S.store.update(roomPath(), up);
+    await log(`동점이라 ${vd.top.map((id) => charOf(id)?.name).join(', ')} 중에서 결선 투표를 해요.`);
+    return;
+  }
+  const res = await S.store.transaction(roomPath('meta'), (mm) => {
+    if (!mm || mm.phase !== 'vote') return undefined;
+    return { ...mm, phase: 'end' };
   });
   if (!res.committed) return;
   await S.store.update(`lobby/${S.code}`, { phase: 'end' });
@@ -1117,13 +1487,13 @@ async function finishVote() {
 
 function tick() {
   if (S.view !== 'room' || !S.room) return;
-  const m = meta();
-  if (m.phase === 'play') {
+  if (meta().phase === 'play') {
+    const ts = timerState();
     const el = $('#timer');
     if (el) {
-      const ts = timerState();
       el.textContent = ts.text;
-      el.className = `timer ${ts.cls}`;
+      el.closest('.clock').className = `clock ${ts.cls}`;
+      $('#clock-arc')?.setAttribute('stroke-dashoffset', (CIRC * (1 - ts.frac)).toFixed(1));
     }
   }
   checkFlow();
@@ -1148,6 +1518,7 @@ function onClick(e) {
       break;
     case 'leave': busy(leave()); break;
     case 'copy-link': copyLink(); break;
+    case 'relations': openModal({ type: 'relations' }); break;
     case 'pick-char': busy(pickChar(id)); break;
     case 'random': busy(randomAll()); break;
     case 'toggle-gm': busy(toggleGM()); break;
@@ -1156,12 +1527,14 @@ function onClick(e) {
     case 'hold': busy(toggleHold()); break;
     case 'next-step': busy(nextStep()); break;
     case 'move': busy(move(id)); break;
-    case 'arm':
-      S.armed = S.armed === id ? null : id;
+    case 'arm': {
+      const cid = el.dataset.id;
+      S.armed = S.armed === cid ? null : cid;
       render();
       break;
+    }
     case 'take': busy(take(id)); break;
-    case 'view-card': openModal({ type: 'card', id }); break;
+    case 'view-card': openModal({ type: 'card', id: el.dataset.id }); break;
     case 'card-mode':
       S.modal.mode = el.dataset.mode || null;
       S.modalSig = null;
@@ -1178,27 +1551,58 @@ function onClick(e) {
       busy(drawDoc());
       break;
     case 'doc-tab':
-      if (S.doc.bytes) window.open(URL.createObjectURL(new Blob([S.doc.bytes], { type: 'application/pdf' })), '_blank');
+      if (S.doc.bytes) window.open(URL.createObjectURL(new Blob([S.doc.bytes], { type: mimeOf(S.doc.kind) })), '_blank');
       break;
+    case 'doc-save': busy(saveDocImage()); break;
     case 'doc-close': closeDoc(); break;
+    case 'chat-toggle':
+      S.chat.open = true;
+      S.chat.sig = null;
+      renderChat();
+      break;
+    case 'chat-close':
+      S.chat.open = false;
+      renderChat();
+      break;
+    case 'chat-view':
+      Object.assign(S.chat, { view: el.dataset.view, picks: el.dataset.view === 'new' ? [] : S.chat.picks, sig: null });
+      renderChat();
+      break;
+    case 'chat-open':
+      Object.assign(S.chat, { view: 'thread', tid: id, sig: null });
+      renderChat();
+      break;
+    case 'chat-pick': {
+      const i = S.chat.picks.indexOf(id);
+      if (i >= 0) S.chat.picks.splice(i, 1);
+      else if (S.chat.picks.length < talkMax() - 1) S.chat.picks.push(id);
+      S.chat.sig = null;
+      renderChat();
+      break;
+    }
+    case 'chat-start': busy(startChat()); break;
     default: break;
   }
 }
+
+function onChange() { /* 선택 상자는 제출할 때 읽는다 */ }
 
 function onSubmit(e) {
   const f = e.target;
   e.preventDefault();
   const data = Object.fromEntries(new FormData(f));
-  if (f.id === 'f-create') busy(createRoom(S.byId[S.selTheme], (data.name || '').trim(), data.pw || ''));
+  if (f.id === 'f-create') busy(createRoom(S.byId[S.selTheme], (data.name || '').trim(), data.pw || '', data.variant));
   else if (f.id === 'f-code') busy(joinRoom((data.code || '').trim().toUpperCase(), (data.name || '').trim()));
   else if (f.id === 'f-share') busy(shareCard(S.modal.id, new FormData(f).getAll('to')));
   else if (f.id === 'f-give') busy(giveCard(S.modal.id, data.to));
+  else if (f.id === 'f-chat') busy(sendChat(data.msg || ''));
 }
 
 function onKey(e) {
   if (e.key === 'Escape') {
     if (!$('#docpane').hidden) closeDoc();
     else if (S.modal) closeModal();
+    else if (S.chat.open) { S.chat.open = false; renderChat(); }
     return;
   }
   const el = e.target;

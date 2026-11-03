@@ -81,6 +81,7 @@ export function peerStore() {
   let seq = 0;
   let statusCb = () => {};
   let saveTimer = null;
+  let myPid = null;
   const pending = new Map();
   const clients = new Set();
 
@@ -109,9 +110,22 @@ export function peerStore() {
   }
 
   /* ---- 방장 ---- */
+  // 밀담(chats)은 그 대화에 들어 있는 사람에게만 보낸다.
+  function viewFor(pid) {
+    const d = tree.data;
+    if (!d.rooms) return d;
+    const rooms = {};
+    for (const [c, r] of Object.entries(d.rooms)) {
+      if (!r || !r.chats) { rooms[c] = r; continue; }
+      const chats = {};
+      for (const [tid, th] of Object.entries(r.chats)) if (pid && th?.members?.[pid]) chats[tid] = th;
+      rooms[c] = { ...r, chats };
+    }
+    return { ...d, rooms };
+  }
+  const snapFor = (c) => ({ k: 'snap', tree: viewFor(c.pid), now: Date.now() });
   function broadcast() {
-    const msg = { k: 'snap', tree: tree.data, now: Date.now() };
-    clients.forEach((c) => { if (c.open) safeSend(c, msg); });
+    clients.forEach((c) => { if (c.open) safeSend(c, snapFor(c)); });
   }
   function hostApply(op) {
     tree.apply(op);
@@ -127,7 +141,10 @@ export function peerStore() {
   function onClientData(c, m) {
     c.lastHeard = Date.now();
     if (!m || typeof m !== 'object') return;
-    if (m.k === 'op') {
+    if (m.k === 'hello') {
+      c.pid = m.pid;
+      safeSend(c, snapFor(c));
+    } else if (m.k === 'op') {
       hostApply(m.op);
       safeSend(c, { k: 'ack', id: m.id });
     } else if (m.k === 'cas') {
@@ -161,7 +178,7 @@ export function peerStore() {
           cn.on('open', () => {
             cn.lastHeard = Date.now();
             clients.add(cn);
-            safeSend(cn, { k: 'snap', tree: tree.data, now: Date.now() });
+            safeSend(cn, snapFor(cn));
           });
           cn.on('data', (m) => onClientData(cn, m));
           cn.on('close', () => dropClient(cn));
@@ -212,7 +229,13 @@ export function peerStore() {
       const t = setTimeout(() => finish(false), 10000);
       peer.on('error', onErr);
       cn.on('data', (m) => {
-        if (conn !== cn && m?.k === 'snap') { conn = cn; onHostData(m); finish(true); return; }
+        if (conn !== cn && m?.k === 'snap') {
+          conn = cn;
+          onHostData(m);
+          if (myPid) safeSend(cn, { k: 'hello', pid: myPid });
+          finish(true);
+          return;
+        }
         if (conn === cn) onHostData(m);
       });
       cn.on('close', () => { if (conn === cn) lost(); else finish(false); });
@@ -286,6 +309,11 @@ export function peerStore() {
     get role() { return role; },
     now: () => Date.now() + offset,
     onStatus(cb) { statusCb = cb; },
+    // 내가 누구인지 방장에게 알린다(밀담을 나에게 온 것만 받기 위해).
+    identify(pid) {
+      myPid = pid;
+      if (role === 'client' && conn) safeSend(conn, { k: 'hello', pid });
+    },
     open(c, as, opts = {}) { return as === 'host' ? openHost(c, !!opts.fresh) : openClient(c); },
     close() {
       clearInterval(beat);
@@ -299,6 +327,7 @@ export function peerStore() {
       peer = null;
       role = null;
       code = null;
+      myPid = null;
       tree.replace({});
     },
     get: async (p) => tree.read(p),

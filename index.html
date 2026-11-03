@@ -27,11 +27,35 @@
         <button type="button" class="btn ghost sm" data-act="doc-zoom" data-z="-1" aria-label="작게">－</button>
         <span class="docpane-zoom">100%</span>
         <button type="button" class="btn ghost sm" data-act="doc-zoom" data-z="1" aria-label="크게">＋</button>
+        <button type="button" class="btn ghost sm" data-act="doc-save">이미지 저장</button>
         <button type="button" class="btn ghost sm" data-act="doc-tab">새 탭</button>
         <button type="button" class="btn sm" data-act="doc-close">닫기</button>
       </div>
     </div>
+    <p class="docpane-help" hidden>
+      일본어 자료예요. '이미지 저장'을 누른 뒤 구글 번역(이미지)이나 파파고 앱의 사진 번역에 넣으면 한국어로 볼 수 있어요. 휴대폰에서는 구글 렌즈로 화면을 비춰도 돼요.
+      <a href="https://translate.google.com/?sl=ja&amp;tl=ko&amp;op=images" target="_blank" rel="noopener">구글 번역(이미지) 열기</a>
+    </p>
     <div class="docpane-body"><div class="docpane-pages"></div></div>
+  </div>
+
+  <button id="chat-fab" class="chat-fab" type="button" data-act="chat-toggle" hidden>밀담 <span class="badge" hidden></span></button>
+  <aside id="chat" class="chat" hidden aria-label="밀담">
+    <header class="chat-head"></header>
+    <div class="chat-body"></div>
+    <form id="f-chat" class="chat-form" hidden autocomplete="off">
+      <input id="chat-input" name="msg" class="input" maxlength="500" placeholder="메시지 입력">
+      <button class="btn sm" type="submit">보내기</button>
+    </form>
+  </aside>
+
+  <div id="curtain" class="curtain" hidden aria-live="assertive">
+    <div class="curtain-inner">
+      <img class="curtain-img" alt="" hidden>
+      <p class="curtain-kicker"></p>
+      <p class="curtain-title"></p>
+      <p class="curtain-sub"></p>
+    </div>
   </div>
 
   <div id="toast" class="toast" role="status" hidden></div>

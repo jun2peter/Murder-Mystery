@@ -33,6 +33,7 @@ async function firebaseStore(config) {
     now: () => Date.now() + offset,
     open: async () => ({ ok: true }),
     close: () => {},
+    identify: () => {},
     get: async (p) => (await fb.get(r(p))).val(),
     set: (p, v) => fb.set(r(p), v),
     update: (p, obj) => fb.update(r(p), obj),
