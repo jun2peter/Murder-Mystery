@@ -555,6 +555,17 @@ table.votes th { color: var(--muted); font-weight: 500; }
 .docpane-help a { color: var(--brass); margin-left: 6px; }
 .docpane-pages img { max-width: none; border-radius: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
 
+/* 쪽마다 붙는 한국어 번역 */
+.tr-page {
+  max-width: 100%; background: var(--paper); color: var(--paper-ink); border-radius: 8px;
+  border-left: 5px solid var(--brass); padding: 14px 18px 18px; display: grid; gap: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); margin-top: -6px;
+}
+.tr-head { font-size: 0.78rem; letter-spacing: 0.06em; color: var(--paper-muted); font-weight: 600; }
+.tr-text { font-family: var(--f-card); white-space: pre-wrap; line-height: 1.85; font-size: 1.02rem; }
+.tr-empty { font-size: 0.85rem; color: var(--paper-muted); }
+.tr-err { font-size: 0.85rem; color: var(--wine); }
+
 /* 밀담 */
 .chat-fab {
   position: fixed; z-index: 30;

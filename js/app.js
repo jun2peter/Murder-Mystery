@@ -1,6 +1,7 @@
 import { createStore } from './store.js';
 import * as Lock from './locked.js';
-import { renderPdf } from './pdfview.js';
+import { renderPdf, openPdf, pageText, pageCanvas } from './pdfview.js';
+import { ocr, toKorean } from './translate.js';
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const ROOM_TTL = 12 * 3600 * 1000;
@@ -26,7 +27,7 @@ const S = {
   dealt: new Set(),
   modal: null,
   modalSig: null,
-  doc: { file: null, title: '', zoom: 1, bytes: null, kind: 'pdf', help: false },
+  doc: { file: null, title: '', zoom: 1, bytes: null, kind: 'pdf', help: false, tr: false, token: 0 },
   files: new Map(),
   pending: new Set(),
   seen: { phase: null, round: null },
@@ -134,10 +135,14 @@ const cardOf = (id) => S.theme.cards.find((c) => c.id === id);
 const cardState = (id) => S.room?.cards?.[id] || {};
 const locName = (id) => S.theme.locations?.find((l) => l.id === id)?.name || id;
 const cardNo = (c) => String(S.theme.cards.filter((x) => x.location === c.location).indexOf(c) + 1).padStart(2, '0');
-const cardTag = (c) => c.title && c.file ? c.title : `${locName(c.location)} ${cardNo(c)}`;
+const cardTag = (c) => c.code || c.label || (c.title && c.file ? c.title : `${locName(c.location)} ${cardNo(c)}`);
+// 카드 앞면 위쪽에 적히는 글자: 코드가 있으면 '1-01 · 서재'
+const cardFace = (c) => (c.code ? `${c.code} · ${locName(c.location)}` : c.label || (c.file ? locName(c.location) : cardTag(c)));
+const cardShort = (c) => `${c.code || c.label || ''} ${c.title || ''}`.trim();
+const isPublicCard = (c) => c?.publicFrom != null && reached(c.publicFrom);
 const canSee = (id) => {
   const st = cardState(id);
-  return st.owner === S.pid || st.public || !!st.shared?.[S.pid] || isGM() || phase() === 'end';
+  return st.owner === S.pid || st.public || !!st.shared?.[S.pid] || isGM() || phase() === 'end' || isPublicCard(cardOf(id));
 };
 // 자료가 열리는 단계에 왔는지
 const reached = (from = 0) => ['vote', 'end'].includes(phase()) || (phase() === 'play' && roundNo() >= from);
@@ -373,7 +378,7 @@ function selectView() {
     </div>
     ${problems.map((x) => `<p class="warn">${esc(x)}</p>`).join('')}
     ${short ? `<p class="muted small">${esc(short)}</p>` : ''}
-    ${t.lang && t.lang !== 'ko' ? '<p class="muted small">자료는 일본어 원본이에요. 자료 창의 \'번역 도움\'으로 한국어로 볼 수 있어요.</p>' : ''}
+    ${t.lang && t.lang !== 'ko' ? '<p class="muted small">자료는 일본어 원본이에요. 자료를 열면 쪽마다 아래에 한국어 기계 번역이 붙어요.</p>' : ''}
   </section>
   <div class="select-layout">
     <div class="char-grid">${t.characters.map((c) => charCard(c, holders[c.id] || [])).join('')}</div>
@@ -1040,6 +1045,19 @@ function canOpen(key) {
   return false;
 }
 
+// 카드 글과 글 자료가 암호화된 묶음(cardText)에 있는 테마는 방에 들어올 때 풀어서 카드에 붙인다.
+async function loadCardText() {
+  const t = S.theme;
+  if (!t?.cardText || t.notes || !S.key) return;
+  try {
+    const data = JSON.parse(new TextDecoder().decode(await loadFile(t.cardText)));
+    if (S.theme !== t) return;
+    S.theme = { ...t, notes: data.notes || {}, cards: t.cards.map((c) => ({ ...c, ...(data.cards?.[c.id] || {}) })) };
+  } catch (e) {
+    toast(`카드 글을 열지 못했어요. (${e.message})`);
+  }
+}
+
 async function loadFile(path) {
   if (S.files.has(path)) return S.files.get(path);
   const res = await fetch(S.theme.base + path);
@@ -1065,10 +1083,13 @@ async function openDoc(key) {
   if (!canOpen(key)) throw new Error('지금은 볼 수 없는 자료예요.');
   const d = docInfo(key);
   if (!d) throw new Error('자료 파일이 없어요.');
-  Object.assign(S.doc, { file: d.path, title: d.title, bytes: null });
+  S.doc.token++;
+  Object.assign(S.doc, { file: d.path, title: d.title, bytes: null, tr: foreignDoc() && trOn() });
   $('#docpane').hidden = false;
   $('.docpane-title').textContent = d.title;
-  $('.docpane-help').hidden = !(S.theme.lang && S.theme.lang !== 'ko');
+  $('.docpane-help').hidden = !foreignDoc();
+  $('.docpane-tr').textContent = S.doc.tr ? '일본어 자료예요. 쪽마다 아래에 한국어 번역이 붙어요(기계 번역).' : '일본어 원문만 보고 있어요. 위의 \'한국어 번역\'을 누르면 번역이 붙어요.';
+  trButton();
   const pages = $('.docpane-pages');
   pages.innerHTML = '<p class="docpane-msg">자료를 여는 중…</p>';
   try {
@@ -1086,7 +1107,12 @@ async function drawDoc() {
   $('.docpane-zoom').textContent = `${Math.round(S.doc.zoom * 100)}%`;
   if (!S.doc.bytes) return;
   const host = $('.docpane-pages');
-  if (S.doc.kind === 'pdf') { await renderPdf(host, S.doc.bytes, S.doc.zoom); return; }
+  if (S.doc.kind === 'pdf') {
+    const file = S.doc.file;
+    await renderPdf(host, S.doc.bytes, S.doc.zoom);
+    if (S.doc.tr && S.doc.file === file) translateDoc();
+    return;
+  }
   const url = URL.createObjectURL(new Blob([S.doc.bytes], { type: mimeOf(S.doc.kind) }));
   host.replaceChildren();
   const img = document.createElement('img');
@@ -1094,6 +1120,80 @@ async function drawDoc() {
   img.alt = S.doc.title;
   img.style.width = `${Math.min(900, host.clientWidth - 2) * S.doc.zoom}px`;
   host.appendChild(img);
+}
+
+/* 일본어 자료 번역: 쪽마다 캔버스 아래에 번역을 붙인다. 번역한 쪽은 이 브라우저에 저장해 다시 열면 바로 보인다. */
+const foreignDoc = () => !!S.theme?.lang && S.theme.lang !== 'ko';
+const trOn = () => lGet('mm:tr') !== '0';
+const trKey = (path) => `mm:tr2:${S.theme.id}:${path}`;
+
+function trButton() {
+  const b = $('[data-act="doc-tr"]');
+  b.hidden = !foreignDoc();
+  b.textContent = S.doc.tr ? '번역 끄기' : '한국어 번역';
+  b.classList.toggle('on', S.doc.tr);
+}
+
+function trBox(canvas, n) {
+  let box = canvas.nextElementSibling;
+  if (!box?.classList.contains('tr-page')) {
+    box = document.createElement('div');
+    box.className = 'tr-page';
+    canvas.after(box);
+  }
+  box.style.width = canvas.style.width;
+  box.innerHTML = `<p class="tr-head">${n}쪽 · 번역을 기다리는 중…</p>`;
+  return box;
+}
+
+function fillTr(box, n, ko) {
+  box.innerHTML = `<p class="tr-head">${n}쪽 · 한국어 (기계 번역)</p>${ko ? `<div class="tr-text">${esc(ko)}</div>` : '<p class="tr-empty">글자가 거의 없는 쪽이에요.</p>'}`;
+}
+
+async function translateDoc() {
+  if (S.doc.kind !== 'pdf' || !S.doc.bytes || !foreignDoc()) return;
+  const token = ++S.doc.token;
+  const { file, bytes } = S.doc;
+  const from = S.theme.lang;
+  const status = $('.docpane-tr');
+  const cache = safe(() => JSON.parse(lGet(trKey(file)))) || {};
+  const pages = [...document.querySelectorAll('.docpane-pages canvas')];
+  const boxes = pages.map((c, i) => trBox(c, i + 1));
+  let doc = null;
+  for (let i = 0; i < pages.length; i++) {
+    const n = i + 1;
+    if (cache[n] != null) { fillTr(boxes[i], n, cache[n]); continue; }
+    try {
+      boxes[i].querySelector('.tr-head').textContent = `${n}쪽 · 번역하는 중…`;
+      status.textContent = `한국어로 번역하는 중… ${n}/${pages.length}쪽`;
+      doc ||= await openPdf(bytes);
+      let src = await pageText(doc, n);
+      if (src.replace(/\s/g, '').length < 15) {
+        status.textContent = `그림 속 글자를 읽는 중… ${n}/${pages.length}쪽 (처음엔 글자 인식 도구를 받느라 조금 걸려요)`;
+        src = await ocr(await pageCanvas(doc, n));
+      }
+      if (token !== S.doc.token) return;
+      const ko = src.replace(/\s/g, '').length < 2 ? '' : await toKorean(src, from);
+      if (token !== S.doc.token) return;
+      cache[n] = ko;
+      lSet(trKey(file), JSON.stringify(cache));
+      fillTr(boxes[i], n, ko);
+    } catch (e) {
+      if (token !== S.doc.token) return;
+      boxes[i].innerHTML = `<p class="tr-head">${n}쪽</p><p class="tr-err">이 쪽은 번역하지 못했어요. (${esc(e.message)}) 위의 '구글 번역(이미지) 열기'를 써 주세요.</p>`;
+    }
+  }
+  if (token === S.doc.token) status.textContent = '기계 번역이라 어색한 곳이 있을 수 있어요. 이름과 숫자는 원문으로 한 번 더 확인하세요.';
+}
+
+function toggleTr() {
+  S.doc.tr = !S.doc.tr;
+  lSet('mm:tr', S.doc.tr ? '1' : '0');
+  trButton();
+  if (S.doc.tr) { translateDoc(); return; }
+  S.doc.token++;
+  document.querySelectorAll('.docpane-pages .tr-page').forEach((el) => el.remove());
+  $('.docpane-tr').textContent = '일본어 원문만 보고 있어요. 위의 \'한국어 번역\'을 누르면 번역이 붙어요.';
 }
 
 function downloadBlob(blob, name) {
@@ -1119,6 +1219,7 @@ async function saveDocImage() {
 }
 
 function closeDoc() {
+  S.doc.token++;
   $('#docpane').hidden = true;
   $('.docpane-pages').replaceChildren();
   Object.assign(S.doc, { file: null, bytes: null });
@@ -1218,6 +1319,7 @@ async function enterRoom(code, pid) {
   Object.assign(S.chat, { open: false, view: 'list', tid: null, picks: [], sig: null, unread: 0 });
   S.key = room.meta.key ? await Lock.importKey(room.meta.key) : null;
   S.files.clear();
+  await loadCardText();
   S.store.identify(pid);
   sSet('mm:cur', JSON.stringify({ code, pid, role: S.store.role }));
   lSet('mm:last', JSON.stringify({ code, name: room.players[pid].name, title: t.title, role: S.store.role }));
@@ -1283,7 +1385,7 @@ function onRoom(v) {
   if (!v?.meta) { leaveView('방이 닫혔어요.'); return; }
   S.room = v;
   if (!v.players?.[S.pid]?.name) { leaveView('방에서 나왔어요.'); return; }
-  if (v.meta.key && !S.key) Lock.importKey(v.meta.key).then((k) => { S.key = k; });
+  if (v.meta.key && !S.key) Lock.importKey(v.meta.key).then((k) => { S.key = k; return loadCardText(); }).then(render);
   if (S.modal?.type === 'card' && !canSee(S.modal.id)) S.modal = null;
   if (S.armed && cardState(S.armed).owner) S.armed = null;
   announce(v.meta);
@@ -1557,6 +1659,7 @@ function onClick(e) {
       if (S.doc.bytes) window.open(URL.createObjectURL(new Blob([S.doc.bytes], { type: mimeOf(S.doc.kind) })), '_blank');
       break;
     case 'doc-save': busy(saveDocImage()); break;
+    case 'doc-tr': toggleTr(); break;
     case 'doc-close': closeDoc(); break;
     case 'chat-toggle':
       S.chat.open = true;

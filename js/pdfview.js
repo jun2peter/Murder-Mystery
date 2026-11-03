@@ -18,14 +18,38 @@ function loadPdfJs() {
   return loading;
 }
 
-export async function renderPdf(container, bytes, zoom = 1) {
+export async function openPdf(bytes) {
   const lib = await loadPdfJs();
-  const doc = await lib.getDocument({
+  return lib.getDocument({
     data: new Uint8Array(bytes.slice(0)),
     cMapUrl: `${CDN}cmaps/`,
     cMapPacked: true,
     standardFontDataUrl: `${CDN}standard_fonts/`,
   }).promise;
+}
+
+// 쪽에 들어 있는 글자(번역용). 그림으로 된 쪽이면 거의 비어 있다.
+export async function pageText(doc, i) {
+  const tc = await (await doc.getPage(i)).getTextContent();
+  return tc.items.map((it) => (it.str || '') + (it.hasEOL ? '\n' : '')).join('').trim();
+}
+
+// 글자 인식용으로 크게 그린 쪽
+export async function pageCanvas(doc, i, width = 1700) {
+  const page = await doc.getPage(i);
+  const vp = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
+  const c = document.createElement('canvas');
+  c.width = Math.floor(vp.width);
+  c.height = Math.floor(vp.height);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  return c;
+}
+
+export async function renderPdf(container, bytes, zoom = 1) {
+  const doc = await openPdf(bytes);
   container.replaceChildren();
   const width = Math.max(280, container.clientWidth - 2);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
