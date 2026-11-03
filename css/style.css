@@ -566,6 +566,54 @@ table.votes th { color: var(--muted); font-weight: 500; }
 .tr-empty { font-size: 0.85rem; color: var(--paper-muted); }
 .tr-err { font-size: 0.85rem; color: var(--wine); }
 
+/* 글로 된 자료 */
+.docpane.is-note [data-act="doc-save"], .docpane.is-note [data-act="doc-tab"] { display: none; }
+.note-paper {
+  width: min(760px, 100%); background: var(--paper); color: var(--paper-ink); border-radius: 6px;
+  padding: clamp(20px, 5vw, 44px); display: grid; gap: 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.note-paper h2 { font-family: var(--f-card); font-size: 1.6em; }
+.note-paper h3 { font-family: var(--f-card); font-size: 1.1em; color: #7a5a1c; margin-bottom: 6px; }
+.note-paper p { font-family: var(--f-card); line-height: 1.85; }
+.note-intro { color: var(--paper-muted); font-size: 0.9em; }
+
+/* 카드 더미 */
+.piles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.pile {
+  display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 14px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: rgba(0, 0, 0, 0.12);
+}
+.pile.can { border-color: var(--brass); background: rgba(211, 173, 101, 0.08); }
+.pile.empty { opacity: 0.55; }
+.pile .btn { grid-column: 1 / -1; }
+.pile-stack { position: relative; width: 52px; height: 72px; }
+.pile-stack .mcard { --w: 52px; position: absolute; inset: 0; cursor: default;
+  box-shadow: inset 0 0 0 3px var(--back), inset 0 0 0 4px rgba(211, 173, 101, 0.55), calc(var(--n) * 2px) calc(var(--n) * 2px) 0 -1px var(--back), calc(var(--n) * 4px) calc(var(--n) * 4px) 0 -2px rgba(211, 173, 101, 0.35); }
+.pile-count { position: absolute; right: -8px; top: -8px; min-width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center;
+  background: var(--brass); color: var(--brass-ink); font: 700 0.8rem var(--f-mono); }
+.pile.empty .pile-count { background: rgba(255, 255, 255, 0.15); color: var(--muted); }
+.pile-text { display: grid; gap: 2px; }
+.pile-text strong { font-family: var(--f-display); }
+.turn-me { color: var(--brass); }
+.draw-log { line-height: 1.7; }
+.seat-badge.turn { background: var(--brass); color: var(--brass-ink); font-weight: 700; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.55; } }
+
+/* 점수표 */
+.score-sheet { display: grid; gap: 12px; }
+.sheet-form { display: grid; gap: 14px; }
+.sheet-form fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px 12px; margin: 0; display: grid; gap: 8px; }
+.sheet-form legend { padding: 0 6px; font-weight: 600; }
+.sheet-row { display: grid; grid-template-columns: 4.5em 1fr; align-items: center; gap: 8px; }
+.sheet-row > span { font-size: 0.85rem; color: var(--muted); }
+.sheet-form textarea { resize: vertical; font: inherit; }
+.reveal-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-top: 10px; }
+.reveal { display: grid; gap: 10px; align-content: start; }
+.reveal-head { display: flex; align-items: center; gap: 10px; }
+.reveal-head > div { display: grid; }
+.reveal ul, .reveal ol { margin: 4px 0 0; padding-left: 18px; font-size: 0.9rem; display: grid; gap: 3px; }
+@media (prefers-reduced-motion: reduce) { .seat-badge.turn { animation: none; } }
+
 /* 밀담 */
 .chat-fab {
   position: fixed; z-index: 30;

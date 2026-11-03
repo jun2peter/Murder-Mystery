@@ -1,0 +1,102 @@
+{
+  "no": 4,
+  "title": "열세 번째 종",
+  "subtitle": "제1회차 · 폭풍우 속 산속 저택 흑운장",
+  "summary": "폭풍우가 몰아치는 밤, 산속 저택 흑운장. 미술품 수집가 백도현 회장의 일흔 번째 생일 만찬 뒤, 회장이 서재에서 숨진 채 발견된다. 다리는 끊기고 전화도 터지지 않는다. 그리고 괘종시계가 열세 번 울린다. 5인용, 진행자 없음, 차례대로 카드를 뽑는 조사.",
+  "credit": "© 식스스톤게임즈(SixStonegames) · 무료 배포 작품(BOOTH)",
+  "kind": "pdf",
+  "lang": "ko",
+  "players": { "min": 5, "max": 5 },
+  "allowGM": false,
+  "howto": "· 캐릭터 5명이 모두 있어야 하는 게임이에요(진행자 없음). 시작 전에 '공통 규칙서'를 함께 읽고(약 10분) 등장인물·공개 정보를 보고 캐릭터를 고르세요.\n· 시작하면 각자 자기 대본만 볼 수 있어요. 시작 아이템 카드는 자동으로 내 카드에 들어와요.\n· 조사는 차례대로 해요. 내 차례가 되면 장소를 골라 그 더미에서 한 장을 무작위로 뽑아요. 한 바퀴에 같은 장소는 2명까지, 자기 방은 못 골라요. 1차는 윤재혁부터, 2차는 백세라부터예요.\n· 2차 조사가 시작되면 '2차 조사 시작' 자료가 모두에게 열려요. 첫 바퀴는 공용 장소(서재·복도·거실·식당, 3명까지), 두 번째 바퀴는 다른 사람의 방에서 골라요.\n· 카드는 '몇 명에게만 보여주기'(카드는 그대로 내 것), '넘겨주기', '전체 공개'로 거래해요. 말로는 거짓말해도 되지만 카드 내용을 지어내 보여주면 안 돼요.\n· 밀담 채팅으로 따로 이야기하거나 거래할 수 있어요(최대 3명).\n· 최종 토론 때 화면의 '점수표'를 채우세요. 모두 투표하면 다섯 명의 점수표가 동시에 공개되고, 엔딩북을 함께 읽어요.",
+  "lock": {"salt":"XR7qa9s2qqxeVLBgu8DrZA==","iter":150000,"check":"hgvoBF5Ms+mtMLIQIoh4sFa8IzaqLP33cKWOJcKY2hY="},
+  "cardText": "files/cards.bin",
+  "talkMax": 3,
+  "docs": [
+    { "id": "rules", "title": "공통 규칙서", "file": "files/rules.bin", "show": "always" },
+    { "id": "second", "title": "2차 조사 시작", "note": "second", "show": "play", "from": 3 },
+    { "id": "ending", "title": "엔딩북", "file": "files/ending.bin", "show": "end" }
+  ],
+  "characters": [
+    { "id": "yun", "name": "윤재혁", "sub": "전속 변호사 · 47세", "note": "회장의 전속 변호사, 20년 근무 · 면담 21:00", "img": "img/yun.jpg", "docs": [{ "title": "대본", "file": "files/yun.bin", "from": 0 }] },
+    { "id": "sera", "name": "백세라", "sub": "회장의 양녀 · 34세", "note": "회장의 양녀, 저택에서 함께 삶 · 면담 21:20", "img": "img/sera.jpg", "docs": [{ "title": "대본", "file": "files/sera.bin", "from": 0 }] },
+    { "id": "kang", "name": "강민호", "sub": "주치의 · 52세", "note": "회장의 주치의 · 면담 21:40", "img": "img/kang.jpg", "docs": [{ "title": "대본", "file": "files/kang.bin", "from": 0 }] },
+    { "id": "cha", "name": "차도윤", "sub": "잡지 기자 · 32세", "note": "회장 인터뷰를 맡은 잡지 기자, 오늘 처음 방문 · 면담 22:00", "img": "img/cha.jpg", "docs": [{ "title": "대본", "file": "files/cha.bin", "from": 0 }] },
+    { "id": "seo", "name": "서하은", "sub": "미술품 감정사 · 38세", "note": "회장 소장품 담당 미술품 감정사 · 면담 22:30", "img": "img/seo.jpg", "docs": [{ "title": "대본", "file": "files/seo.bin", "from": 0 }] }
+  ],
+  "locations": [
+    { "id": "study", "name": "서재", "kind": "public" },
+    { "id": "hall", "name": "복도", "kind": "public" },
+    { "id": "living", "name": "거실", "kind": "public", "from": 3 },
+    { "id": "dining", "name": "식당", "kind": "public", "from": 3 },
+    { "id": "r-yun", "name": "윤재혁의 방", "owner": "yun" },
+    { "id": "r-sera", "name": "백세라의 방", "owner": "sera" },
+    { "id": "r-kang", "name": "강민호의 방", "owner": "kang" },
+    { "id": "r-cha", "name": "차도윤의 방", "owner": "cha" },
+    { "id": "r-seo", "name": "서하은의 방", "owner": "seo" }
+  ],
+  "cards": [
+    { "id": "s-yun", "start": "yun", "label": "시작 아이템 · 윤재혁" },
+    { "id": "s-sera", "start": "sera", "label": "시작 아이템 · 백세라" },
+    { "id": "s-kang", "start": "kang", "label": "시작 아이템 · 강민호" },
+    { "id": "s-cha", "start": "cha", "label": "시작 아이템 · 차도윤" },
+    { "id": "s-seo", "start": "seo", "label": "시작 아이템 · 서하은" },
+    { "id": "1-01", "code": "1-01", "location": "study", "round": 1 },
+    { "id": "1-02", "code": "1-02", "location": "study", "round": 1 },
+    { "id": "1-03", "code": "1-03", "location": "study", "round": 1 },
+    { "id": "1-04", "code": "1-04", "location": "study", "round": 1 },
+    { "id": "1-12", "code": "1-12", "location": "study", "round": 1 },
+    { "id": "1-05", "code": "1-05", "location": "hall", "round": 1 },
+    { "id": "1-06", "code": "1-06", "location": "hall", "round": 1 },
+    { "id": "1-13", "code": "1-13", "location": "hall", "round": 1 },
+    { "id": "1-07", "code": "1-07", "location": "r-sera", "round": 1 },
+    { "id": "1-08", "code": "1-08", "location": "r-kang", "round": 1 },
+    { "id": "1-09", "code": "1-09", "location": "r-yun", "round": 1 },
+    { "id": "1-10", "code": "1-10", "location": "r-seo", "round": 1 },
+    { "id": "1-11", "code": "1-11", "location": "r-cha", "round": 1 },
+    { "id": "2-01", "code": "2-01", "location": "study", "round": 3 },
+    { "id": "2-02", "code": "2-02", "location": "study", "round": 3 },
+    { "id": "2-03", "code": "2-03", "location": "study", "publicFrom": 3, "label": "공개 카드 · 2-03" },
+    { "id": "2-04", "code": "2-04", "location": "living", "round": 3 },
+    { "id": "2-05", "code": "2-05", "location": "living", "round": 3 },
+    { "id": "2-07", "code": "2-07", "location": "living", "round": 3 },
+    { "id": "2-06", "code": "2-06", "location": "dining", "round": 3 },
+    { "id": "2-08", "code": "2-08", "location": "r-yun", "round": 3 },
+    { "id": "2-09", "code": "2-09", "location": "r-cha", "round": 3 },
+    { "id": "2-10", "code": "2-10", "location": "r-sera", "round": 3 },
+    { "id": "2-11", "code": "2-11", "location": "r-seo", "round": 3 }
+  ],
+  "cardRules": { "pile": true, "note": "보여주기만 해도 거래가 돼요. 보여준 카드는 그대로 내 것이에요. 카드 내용을 지어내 다르게 보여주면 안 돼요(말로 하는 거짓말은 괜찮아요)." },
+  "rounds": [
+    { "name": "오프닝·대본 읽기", "minutes": 20, "pick": 0, "note": "한 명이 규칙서의 오프닝을 소리 내어 읽어요. 각자 대본을 읽은 뒤 윤재혁부터 면담 순서대로 공개 자기소개를 해요." },
+    { "name": "1차 조사", "minutes": 30, "talk": true, "note": "차례대로 장소를 골라 그 더미에서 한 장씩 뽑아요. 두 바퀴, 1인당 2장. 기다리는 동안 자유롭게 대화하고 거래해도 돼요.",
+      "turns": { "start": "yun", "laps": [{ "scope": "any", "cap": 2 }, { "scope": "any", "cap": 2 }] } },
+    { "name": "1차 토론", "minutes": 20, "talk": true, "pick": 0, "note": "면담 순서대로 한 바퀴 돌며 한마디씩 한 뒤 자유 토론. 숨길 건 숨기고, 말로는 누구나 거짓말해도 돼요." },
+    { "name": "2차 조사", "minutes": 30, "talk": true, "openDoc": "second", "note": "'2차 조사 시작'을 한 명이 소리 내어 읽은 뒤 백세라부터 조사해요. 거실과 식당이 열리고, 1차에 남은 카드도 뽑힐 수 있어요.",
+      "turns": { "start": "sera", "laps": [{ "scope": "public", "cap": 3 }, { "scope": "rooms", "cap": 2 }] } },
+    { "name": "최종 토론", "minutes": 25, "talk": true, "pick": 0, "note": "한 바퀴 돌며 지금 누구를 의심하는지 말한 뒤 자유 토론과 마지막 거래. 끝나기 1분 전부터는 새 제안 없이 답만 해요. 끝나기 전에 점수표를 채워 두세요." }
+  ],
+  "scoreSheet": { "from": 4, "oddities": 6 },
+  "vote": { "noSelf": true, "tieAll": true },
+  "endNote": "다섯 명의 점수표가 공개됐어요. 범인 지목, 알아낸 비밀, 이상했던 점, 손에 든 카드를 확인한 뒤 한 명이 엔딩북을 소리 내어 읽고 '점수 집계'대로 점수를 매겨요. 최다 득표가 동률이면 동률인 사람 모두가 최다 득표자예요.",
+  "relations": {
+    "width": 1000,
+    "people": [
+      { "id": "dohyun", "name": "백도현", "sub": "미술품 수집가 · 회장", "note": "일흔 번째 생일 밤 서재에서 숨진 채 발견", "img": "img/dohyun.jpg", "x": 500, "y": 420, "victim": true },
+      { "id": "sera", "x": 500, "y": 100 },
+      { "id": "yun", "x": 140, "y": 270 },
+      { "id": "seo", "x": 860, "y": 270 },
+      { "id": "kang", "x": 190, "y": 720 },
+      { "id": "cha", "x": 810, "y": 720 },
+      { "id": "butler", "name": "집사 노씨", "sub": "플레이어 아님", "note": "23:30 시신 발견", "img": "img/butler.jpg", "x": 500, "y": 800 }
+    ],
+    "links": [
+      { "a": "sera", "b": "dohyun", "label": "양녀 · 함께 삶", "at": 0.62 },
+      { "a": "yun", "b": "dohyun", "label": "전속 변호사 · 20년" },
+      { "a": "seo", "b": "dohyun", "label": "소장품 감정사" },
+      { "a": "kang", "b": "dohyun", "label": "주치의", "at": 0.3 },
+      { "a": "cha", "b": "dohyun", "label": "인터뷰 기자 · 첫 방문", "at": 0.3 },
+      { "a": "butler", "b": "dohyun", "label": "집사", "at": 0.45 }
+    ]
+  }
+}

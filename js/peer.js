@@ -110,16 +110,20 @@ export function peerStore() {
   }
 
   /* ---- 방장 ---- */
-  // 밀담(chats)은 그 대화에 들어 있는 사람에게만 보낸다.
+  // 밀담(chats)은 그 대화에 들어 있는 사람에게만 보낸다. 점수표(sheets)는 결과가 나오기 전까지 본인 것만 보낸다.
   function viewFor(pid) {
     const d = tree.data;
     if (!d.rooms) return d;
     const rooms = {};
     for (const [c, r] of Object.entries(d.rooms)) {
-      if (!r || !r.chats) { rooms[c] = r; continue; }
-      const chats = {};
-      for (const [tid, th] of Object.entries(r.chats)) if (pid && th?.members?.[pid]) chats[tid] = th;
-      rooms[c] = { ...r, chats };
+      if (!r || (!r.chats && !r.sheets)) { rooms[c] = r; continue; }
+      const v = { ...r };
+      if (r.chats) {
+        v.chats = {};
+        for (const [tid, th] of Object.entries(r.chats)) if (pid && th?.members?.[pid]) v.chats[tid] = th;
+      }
+      if (r.sheets && r.meta?.phase !== 'end') v.sheets = pid && r.sheets[pid] ? { [pid]: r.sheets[pid] } : {};
+      rooms[c] = v;
     }
     return { ...d, rooms };
   }

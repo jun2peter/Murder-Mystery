@@ -209,7 +209,7 @@ function onConnStatus(s) {
 function render() {
   const view = $('#view');
   const keep = {};
-  view.querySelectorAll('input[id], select[id]').forEach((i) => { if (i.type !== 'checkbox' && i.type !== 'radio') keep[i.id] = i.value; });
+  view.querySelectorAll('input[id], select[id], textarea[id]').forEach((i) => { if (i.type !== 'checkbox' && i.type !== 'radio') keep[i.id] = i.value; });
   const focusId = document.activeElement?.id;
 
   if (S.view === 'home') renderHome(); else renderRoom();
@@ -331,7 +331,11 @@ function seatsStrip() {
   const m = meta();
   const badge = (p) => {
     if (m.phase === 'select') return p.agree === m.selVer ? '<span class="seat-badge ok">동의</span>' : '';
-    if (m.phase === 'play') return p.skip === m.round ? '<span class="seat-badge">건너뜀</span>' : '';
+    if (m.phase === 'play') {
+      const tn = turnInfo();
+      if (tn && !tn.done && tn.pid === p.id) return '<span class="seat-badge turn">차례</span>';
+      return p.skip === m.round ? '<span class="seat-badge">건너뜀</span>' : '';
+    }
     if (m.phase === 'vote') return !p.gm && p.vote ? '<span class="seat-badge ok">투표함</span>' : '';
     return '';
   };
@@ -459,6 +463,7 @@ function playView() {
   <div class="play-layout">
     <div class="play-main">
       ${docsPanel()}
+      ${sheetPanel()}
       ${t.cards?.length ? tableView() + handView() : ''}
     </div>
     <aside class="side">${placesPanel()}${t.cards?.length ? sharedPanel() : ''}${logPanel()}</aside>
@@ -512,7 +517,138 @@ function pickText() {
   return `이번 단계에 1인당 ${r.pick}장 · 나는 ${picksLeft()}장 더 가져갈 수 있어요.`;
 }
 
+/* 차례대로 더미에서 뽑기 (cardRules.pile + 단계의 turns) */
+// 차례는 캐릭터 순서(면담 순서)대로 turns.start부터 돈다. 맡은 사람이 없는 캐릭터는 건너뛴다.
+function turnOrder(start) {
+  const cs = S.theme.characters;
+  const i = Math.max(0, cs.findIndex((c) => c.id === start));
+  return [...cs.slice(i), ...cs.slice(0, i)].map((c) => ({ char: c.id, pid: holderOf(c.id)?.id })).filter((x) => x.pid);
+}
+
+function turnInfo() {
+  if (phase() !== 'play') return null;
+  const r = S.theme.rounds[roundNo()];
+  if (!r?.turns) return null;
+  const order = turnOrder(r.turns.start);
+  const d = S.room?.draw?.[roundNo()] || {};
+  const n = d.n || 0;
+  const picks = Object.entries(d.picks || {}).sort((a, b) => +a[0].slice(1) - +b[0].slice(1)).map(([, p]) => p);
+  const total = order.length * r.turns.laps.length;
+  if (!order.length || n >= total) return { done: true, n, total, picks, order };
+  const lap = Math.floor(n / order.length);
+  return { done: false, n, total, lap, rule: r.turns.laps[lap] || {}, ...order[n % order.length], picks, order };
+}
+
+const pileOf = (locId) => S.theme.cards.filter((c) => c.location === locId && !c.start && c.publicFrom == null
+  && (c.round ?? 0) <= roundNo() && !cardState(c.id).owner);
+const locOpen = (l) => (l.from ?? 0) <= roundNo();
+const SCOPE = { public: '공용 장소', rooms: '다른 사람의 방' };
+
+// 이번 차례에 고를 수 있는 장소. 범위 안에 남은 곳이 없으면 아무 곳이나 고를 수 있다.
+function legalLocs(tn) {
+  const rule = tn.rule || {};
+  const used = (l) => tn.picks.filter((p) => p.lap === tn.lap && p.loc === l.id).length;
+  const base = (S.theme.locations || []).filter((l) => locOpen(l) && l.owner !== tn.char && pileOf(l.id).length);
+  const inScope = (l) => (rule.scope === 'public' ? l.kind === 'public' : rule.scope === 'rooms' ? !!l.owner : true);
+  const capOk = (l) => used(l) < (rule.cap ?? Infinity);
+  let ok = base.filter((l) => inScope(l) && capOk(l));
+  let anywhere = false;
+  if (!ok.length) { ok = base.filter(capOk); anywhere = true; }
+  if (!ok.length) ok = base;
+  return { ok: new Set(ok.map((l) => l.id)), anywhere, used };
+}
+
+function pileView() {
+  const t = S.theme;
+  const r = t.rounds[roundNo()] || {};
+  const tn = turnInfo();
+  const live = tn && !tn.done;
+  const myTurn = live && tn.pid === S.pid;
+  const legal = live ? legalLocs(tn) : null;
+  const free = !tn && phase() === 'play' && !isGM() && r.pick !== 0 && picksLeft() > 0;
+  let head;
+  if (tn?.done) head = '이번 조사는 모두 끝났어요. 남은 시간에는 자유롭게 대화하고 거래하세요.';
+  else if (live) {
+    const scope = SCOPE[tn.rule.scope];
+    head = `${tn.lap + 1}바퀴째${scope ? ` · ${scope}에서` : ''}${tn.rule.cap ? ` · 같은 장소 ${tn.rule.cap}명까지` : ''}${legal.anywhere ? ' · 범위 안에 남은 곳이 없어 아무 곳이나 골라도 돼요' : ''}<br>`
+      + (myTurn ? '<strong class="turn-me">내 차례예요! 장소를 골라 한 장 뽑으세요.</strong>' : `지금 차례: <strong>${esc(who(tn.pid))}</strong>`);
+  } else head = esc(pickText());
+  const history = tn?.picks.length ? `<p class="small muted draw-log">${tn.picks.map((p) => `${esc(charOf(S.room.players?.[p.pid]?.char)?.name || '누군가')} → ${p.loc ? esc(locName(p.loc)) : '넘김'}`).join(' · ')}</p>` : '';
+  const piles = (t.locations || []).map((l) => {
+    const left = pileOf(l.id).length;
+    let why = '';
+    if (!locOpen(l)) why = `${esc(t.rounds[l.from]?.name || '나중')}에 열려요`;
+    else if (!left) why = '남은 카드 없음';
+    else if (legal && !legal.ok.has(l.id)) {
+      why = l.owner === tn.char ? (myTurn ? '내 방은 못 골라요' : '차례인 사람의 방') : legal.used(l) >= (tn.rule.cap ?? Infinity) ? '이번 바퀴 꽉 찼어요' : '이번 바퀴엔 못 골라요';
+    } else if (legal && tn.rule.cap) why = `이번 바퀴 ${legal.used(l)}/${tn.rule.cap}명`;
+    const can = left > 0 && ((myTurn && legal.ok.has(l.id)) || (free && locOpen(l)));
+    return `<div class="pile ${can ? 'can' : ''} ${!locOpen(l) || !left ? 'empty' : ''}">
+      <div class="pile-stack" style="--n:${Math.min(left, 3)}" aria-hidden="true">${left ? '<span class="mcard back"></span>' : ''}<span class="pile-count">${left}</span></div>
+      <div class="pile-text"><strong>${esc(l.name)}</strong><span class="small muted">${why || `${left}장 남음`}</span></div>
+      ${can ? `<button class="btn sm" data-act="draw" data-id="${l.id}">한 장 뽑기</button>` : ''}
+    </div>`;
+  }).join('');
+  const pass = live && isHost() ? `<button class="btn ghost sm" data-act="pass-turn">${esc(charOf(tn.char)?.name || '')} 차례 넘기기</button>` : '';
+  return `<section class="table">
+    <div class="table-head"><h3>조사 테이블</h3>${pass}</div>
+    <p class="small ${myTurn ? '' : 'muted'}">${head}</p>
+    ${history}
+    <div class="piles">${piles}</div>
+  </section>`;
+}
+
+/* 점수표: 정한 단계부터 채우고, 결과가 나오면 모두 공개된다(그 전에는 방장 창이 본인 것만 보낸다). */
+const sheetOn = () => {
+  const sc = S.theme.scoreSheet;
+  if (!sc || isGM()) return false;
+  return phase() === 'vote' || (phase() === 'play' && roundNo() >= (sc.from ?? 0));
+};
+const heldCards = (pid) => S.theme.cards.filter((c) => cardState(c.id).owner === pid);
+
+function sheetPanel() {
+  if (!sheetOn()) return '';
+  const sc = S.theme.scoreSheet;
+  const mine = S.room?.sheets?.[S.pid] || {};
+  const others = S.theme.characters.filter((c) => c.id !== me().char);
+  const n = sc.oddities || 6;
+  return `<section class="panel score-sheet">
+    <div class="table-head"><h3>점수표</h3><span class="small muted">${mine.t ? `${clock(mine.t)}에 저장함 · ` : ''}모두 투표하면 다섯 명 것이 동시에 공개돼요</span></div>
+    <form id="f-sheet" class="sheet-form">
+      <p class="small">1. 범인 지목은 ${phase() === 'vote' ? '아래 투표로 해요. 투표하면 점수표도 함께 저장돼요.' : '최종 투표 때 해요(자기 자신은 안 돼요).'}</p>
+      <fieldset><legend>2. 알아낸 비밀 <span class="small muted">대상 한 명마다 한 줄 · “~일 수도”, “A거나 B”는 오답</span></legend>
+        ${others.map((c) => `<label class="sheet-row"><span>${esc(c.name)}</span><input class="input" id="sh-sec-${c.id}" name="sec-${c.id}" maxlength="200" value="${esc(mine.sec?.[c.id] || '')}" placeholder="${esc(c.name)}의 비밀"></label>`).join('')}
+      </fieldset>
+      <fieldset><legend>3. 이 저택에서 이상했던 점 <span class="small muted">사건을 가리키는 단서는 오답 · 직접 본 카드와 집사 증언만</span></legend>
+        ${Array.from({ length: n }, (_, i) => `<label class="sheet-row"><span>${i + 1}</span><input class="input" id="sh-odd-${i}" name="odd-${i}" maxlength="200" value="${esc(mine.odd?.[i] || '')}"></label>`).join('')}
+      </fieldset>
+      <label class="field"><span>4. 개인 목표 메모 (대본의 목표에 적으라고 한 것)</span><textarea class="input" id="sh-memo" name="memo" rows="2" maxlength="400">${esc(mine.memo || '')}</textarea></label>
+      <p class="small muted">5. 지금 손에 든 카드: ${heldCards(S.pid).map((c) => esc(cardShort(c))).join(', ') || '없음'}</p>
+      <div class="btn-row"><button class="btn" type="submit">점수표 저장</button></div>
+    </form>
+  </section>`;
+}
+
+function sheetReveal(vd) {
+  if (!S.theme.scoreSheet) return '';
+  return `<section><p class="eyebrow">점수표 공개</p><div class="reveal-grid">${actors().map((p) => {
+    const sh = S.room?.sheets?.[p.id] || {};
+    const sec = Object.entries(sh.sec || {});
+    const odd = (sh.odd || []).filter(Boolean);
+    const held = heldCards(p.id);
+    return `<article class="panel reveal">
+      <div class="reveal-head">${avatar(p.id, 'lg')}<div><strong>${esc(p.name)}</strong><span class="small muted">${esc(charOf(p.char)?.name || '')}</span></div></div>
+      <div><p class="eyebrow">범인 지목</p><p>${esc(p.vote ? vd.label(p.vote) : '-')}</p></div>
+      <div><p class="eyebrow">알아낸 비밀</p>${sec.length ? `<ul>${sec.map(([id, s]) => `<li><strong>${esc(charOf(id)?.name || id)}</strong> ${esc(s)}</li>`).join('')}</ul>` : '<p class="small muted">없음</p>'}</div>
+      <div><p class="eyebrow">이상했던 점</p>${odd.length ? `<ol>${odd.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : '<p class="small muted">없음</p>'}</div>
+      ${sh.memo ? `<div><p class="eyebrow">목표 메모</p><p class="small">${esc(sh.memo)}</p></div>` : ''}
+      <div><p class="eyebrow">손에 든 카드</p><p class="small">${held.map((c) => esc(cardShort(c))).join(', ') || '없음'}</p></div>
+    </article>`;
+  }).join('')}</div></section>`;
+}
+
 function tableView() {
+  if (cardRules().pile) return pileView();
   const t = S.theme;
   const visible = t.cards.filter((c) => (c.round ?? 0) <= roundNo());
   const locs = (t.locations || [])
@@ -544,8 +680,8 @@ function tableCard(c, i) {
 
 function faceCard(c, badge = '', extra = '') {
   return `<div class="mcard face ${extra}" data-id="${c.id}" style="--rot:${tilt(c.id, 3)}deg" role="button" tabindex="0" data-act="view-card">
-    <span class="mcard-loc">${esc(c.file ? locName(c.location) : cardTag(c))}</span>
-    <span class="mcard-title">${esc(c.title)}</span>
+    <span class="mcard-loc">${esc(cardFace(c))}</span>
+    <span class="mcard-title">${esc(c.title || '…')}</span>
     ${badge ? `<span class="pub">${esc(badge)}</span>` : ''}
   </div>`;
 }
@@ -556,14 +692,14 @@ function handView() {
     <h3>내 카드 ${mine.length}장</h3>
     <div class="hand-fan">${mine.length
       ? mine.map((c) => faceCard(c, cardState(c.id).public ? '공개함' : '', S.arrived === c.id ? 'arrive' : '')).join('')
-      : '<p class="muted small">아직 가져온 카드가 없어요. 테이블의 카드를 눌러 가져오세요.</p>'}</div>
+      : `<p class="muted small">${cardRules().pile ? '아직 가진 카드가 없어요. 차례가 오면 조사 테이블에서 뽑아요.' : '아직 가져온 카드가 없어요. 테이블의 카드를 눌러 가져오세요.'}</p>`}</div>
   </section>`;
 }
 
 function cardList(list) {
   if (!list.length) return '<p class="small muted">없음</p>';
   return `<ul class="card-list">${list.map((c) => `<li><button data-act="view-card" data-id="${c.id}">
-    <strong>${esc(c.title)}</strong><span>${esc(cardTag(c))} · ${esc(who(cardState(c.id).owner))}</span>
+    <strong>${esc(c.title || '…')}</strong><span>${esc(cardTag(c))}${cardState(c.id).owner ? ` · ${esc(who(cardState(c.id).owner))}` : ''}</span>
   </button></li>`).join('')}</ul>`;
 }
 
@@ -571,7 +707,7 @@ function sharedPanel() {
   const cards = S.theme.cards;
   const rules = cardRules();
   if (!rules.public && !rules.share) return '';
-  const pub = cards.filter((c) => cardState(c.id).public);
+  const pub = cards.filter((c) => cardState(c.id).public || isPublicCard(c));
   const toMe = cards.filter((c) => {
     const st = cardState(c.id);
     return !st.public && st.owner && st.owner !== S.pid && st.shared?.[S.pid];
@@ -634,8 +770,8 @@ function voteView() {
     ${v.allowNone && !m.runoff ? `<button class="vote-btn none ${mine.vote === 'none' ? 'mine' : ''}" data-act="vote" data-id="none"><span class="vote-text"><strong>${esc(v.noneLabel || '범인 없음')}</strong><span>사건이 아니라고 봐요</span></span>${mine.vote === 'none' ? '<span class="stamp">선택</span>' : ''}</button>` : ''}
   </div>`}
   <div class="play-layout">
-    <div class="play-main">${docsPanel()}</div>
-    <aside class="side">${logPanel()}</aside>
+    <div class="play-main">${sheetPanel()}${docsPanel()}${t.cards?.length && t.scoreSheet ? handView() : ''}</div>
+    <aside class="side">${t.cards?.length ? sharedPanel() : ''}${logPanel()}</aside>
   </div>`;
 }
 
@@ -651,6 +787,7 @@ function verdict() {
   const max = Math.max(0, ...Object.values(tally));
   const top = Object.keys(tally).filter((k) => tally[k] === max);
   if (top.length === 1) return { id: top[0], text: label(top[0]), how: `최다 득표 ${max}표`, label, tally, top };
+  if (top.length > 1 && v.tieAll) return { id: null, text: top.map(label).join(' · '), how: `공동 최다 득표 ${max}표`, label, tally, top };
   return { id: null, text: (top.length > 1 && v.tieText) || '결정하지 못했어요', how: top.length ? `동점: ${top.map(label).join(', ')}` : '투표 없음', label, tally, top };
 }
 
@@ -681,7 +818,9 @@ function endView() {
     <div class="play-main result">
       <div class="tbl-wrap"><table class="votes"><thead><tr><th>플레이어</th><th>캐릭터</th><th>투표</th></tr></thead>
         <tbody>${act.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(charOf(p.char)?.name || '')}</td><td>${esc(p.vote ? vd.label(p.vote) : '-')}</td></tr>`).join('')}</tbody></table></div>
-      ${isPdf(t) ? `<div><p class="eyebrow">모든 자료</p><div class="docs">${docs}</div></div>` : `
+      ${sheetReveal(vd)}
+      ${isPdf(t) ? `<div><p class="eyebrow">모든 자료</p><div class="docs">${docs}</div></div>
+        ${t.cards?.some((c) => c.text) ? `<section class="table"><div class="table-head"><h3>모든 단서</h3></div><div class="loc-cards">${t.cards.map((c) => faceCard(c)).join('')}</div></section>` : ''}` : `
         <div class="panel"><p class="eyebrow">진상</p><h3 style="margin:6px 0 12px">진범은 ${esc(truth?.name || '?')}</h3><p class="story">${esc(t.solution || '')}</p></div>
         <div class="panel"><p class="eyebrow">모두의 비밀</p>${t.characters.map((c) => `<div style="margin-top:14px"><h4>${esc(c.name)}</h4><p class="story small">${esc(c.secret || '')}</p></div>`).join('')}</div>
         ${t.cards?.length ? `<section class="table"><div class="table-head"><h3>모든 단서</h3></div><div class="loc-cards">${t.cards.map((c) => faceCard(c)).join('')}</div></section>` : ''}`}
@@ -794,7 +933,7 @@ function cardModal() {
   const rules = cardRules();
   const others = players().filter((p) => p.id !== S.pid && !p.gm);
   const sharedNames = Object.keys(st.shared || {}).filter((k) => st.shared[k]).map(who);
-  const status = st.public ? '전체 공개된 카드예요.'
+  const status = st.public || isPublicCard(c) ? '전체 공개된 카드예요.'
     : mine ? (sharedNames.length ? `보여준 사람: ${sharedNames.join(', ')}` : '아직 아무에게도 보여주지 않았어요.')
       : st.owner ? `${who(st.owner)}님의 카드예요.` : '';
   const live = ['play', 'vote'].includes(phase());
@@ -823,10 +962,11 @@ function cardModal() {
     }
     if (rules.note) actions += `<p class="small muted">${esc(rules.note)}</p>`;
   }
-  return `<div class="modal-head"><p class="eyebrow">${c.file ? '수색 시트' : '단서 카드'}</p>${closeBtn}</div>
+  const kind = c.start ? '시작 아이템' : c.publicFrom != null ? '공개 카드' : c.file ? '수색 시트' : '단서 카드';
+  return `<div class="modal-head"><p class="eyebrow">${kind}</p>${closeBtn}</div>
     <article class="paper-card" style="${S.modal.fresh ? '' : 'animation:none'}">
-      <span class="mcard-loc">${esc(locName(c.location))}${c.back && c.file ? ` · ${esc(c.back)}` : ''}</span>
-      <h3>${esc(c.title)}</h3>
+      <span class="mcard-loc">${c.code || c.label ? esc(cardFace(c)) : `${esc(locName(c.location))}${c.back && c.file ? ` · ${esc(c.back)}` : ''}`}</span>
+      <h3>${esc(c.title || '…')}</h3>
       ${c.text ? `<div class="body">${esc(c.text)}</div>` : ''}
       ${c.file ? `<button class="btn" data-act="doc" data-file="k:${esc(c.id)}">시트 열기</button>` : ''}
     </article>
@@ -999,7 +1139,10 @@ function announce(m) {
   const t = S.theme;
   if (m.phase === 'play') {
     const r = t.rounds[m.round];
-    curtain(ph === 'select' ? '게임 시작' : `${m.round + 1}단계`, r?.name || '', r?.talk ? '밀담할 수 있어요' : '');
+    const sub = r?.turns ? `${charOf(r.turns.start)?.name || ''}부터 차례대로 조사해요` : r?.talk ? '밀담할 수 있어요' : '';
+    curtain(ph === 'select' ? '게임 시작' : `${m.round + 1}단계`, r?.name || '', sub);
+    // 단계가 바뀔 때 모두에게 펼쳐 둘 자료(예: '2차 조사 시작')
+    if (r?.openDoc && ph === 'play') setTimeout(() => { if (canOpen(`d:${r.openDoc}`)) busy(openDoc(`d:${r.openDoc}`)); }, 2400);
   } else if (m.phase === 'vote') {
     curtain('최종 투표', '범인은 누구일까요?');
   } else if (m.phase === 'end') {
@@ -1013,7 +1156,11 @@ function announce(m) {
 function docInfo(key) {
   const t = S.theme;
   const [kind, a, b] = key.split(':');
-  if (kind === 'd') { const d = t.docs?.find((x) => x.id === a); return d?.file ? { path: d.file, title: d.title } : null; }
+  if (kind === 'd') {
+    const d = t.docs?.find((x) => x.id === a);
+    if (d?.note) return { note: d.note, title: d.title };
+    return d?.file ? { path: d.file, title: d.title } : null;
+  }
   if (kind === 'k') { const c = cardOf(a); return c?.file ? { path: c.file, title: `수색 시트 · ${c.title}` } : null; }
   const c = charOf(a);
   if (!c) return null;
@@ -1084,7 +1231,9 @@ async function openDoc(key) {
   const d = docInfo(key);
   if (!d) throw new Error('자료 파일이 없어요.');
   S.doc.token++;
-  Object.assign(S.doc, { file: d.path, title: d.title, bytes: null, tr: foreignDoc() && trOn() });
+  $('#docpane').classList.toggle('is-note', !!d.note);
+  if (d.note) { await showNote(d); return; }
+  Object.assign(S.doc, { file: d.path, title: d.title, bytes: null, kind: 'pdf', tr: foreignDoc() && trOn() });
   $('#docpane').hidden = false;
   $('.docpane-title').textContent = d.title;
   $('.docpane-help').hidden = !foreignDoc();
@@ -1103,8 +1252,24 @@ async function openDoc(key) {
   }
 }
 
+// 글로 된 자료(카드 묶음의 notes)는 종이처럼 그려서 보여준다.
+async function showNote(d) {
+  Object.assign(S.doc, { file: `note:${d.note}`, title: d.title, bytes: null, kind: 'note', tr: false });
+  $('#docpane').hidden = false;
+  $('.docpane-title').textContent = d.title;
+  $('.docpane-help').hidden = true;
+  $('[data-act="doc-tr"]').hidden = true;
+  if (!S.theme.notes) await loadCardText();
+  const n = S.theme.notes?.[d.note];
+  $('.docpane-pages').innerHTML = n
+    ? `<article class="note-paper"><h2>${esc(n.title)}</h2>${n.intro ? `<p class="note-intro">${esc(n.intro)}</p>` : ''}${(n.sections || []).map((s) => `<section><h3>${esc(s.h)}</h3><p>${esc(s.p)}</p></section>`).join('')}</article>`
+    : '<p class="docpane-msg">자료를 열지 못했어요. 잠시 뒤 다시 열어 주세요.</p>';
+  drawDoc();
+}
+
 async function drawDoc() {
   $('.docpane-zoom').textContent = `${Math.round(S.doc.zoom * 100)}%`;
+  if (S.doc.kind === 'note') { const p = $('.note-paper'); if (p) p.style.fontSize = `${S.doc.zoom}rem`; return; }
   if (!S.doc.bytes) return;
   const host = $('.docpane-pages');
   if (S.doc.kind === 'pdf') {
@@ -1390,6 +1555,10 @@ function onRoom(v) {
   if (S.armed && cardState(S.armed).owner) S.armed = null;
   announce(v.meta);
   render();
+  const tn = turnInfo();
+  const turnKey = tn && !tn.done && tn.pid === S.pid ? `${roundNo()}:${tn.n}` : null;
+  if (turnKey && turnKey !== S.turnSeen) toast('내 차례예요! 조사 테이블에서 장소를 골라 한 장 뽑으세요.');
+  S.turnSeen = turnKey;
   checkFlow();
 }
 
@@ -1471,6 +1640,61 @@ async function take(id) {
   openModal({ type: 'card', id });
 }
 
+// 내 차례에 고른 장소의 더미에서 한 장을 무작위로 뽑는다. 차례가 없는 단계면 가져갈 수 있는 장수 안에서 뽑는다.
+async function draw(locId) {
+  const m = meta();
+  if (m.phase !== 'play' || isGM()) return;
+  const r = m.round;
+  const tn = turnInfo();
+  const loc = S.theme.locations.find((l) => l.id === locId);
+  if (tn) {
+    if (tn.done) throw new Error('이번 조사는 끝났어요.');
+    if (tn.pid !== S.pid) throw new Error(`지금은 ${who(tn.pid)}님 차례예요.`);
+    if (!legalLocs(tn).ok.has(locId)) throw new Error('이번 차례에는 그 장소를 고를 수 없어요.');
+  } else if (S.theme.rounds[r]?.pick === 0 || picksLeft() <= 0) {
+    throw new Error('지금은 카드를 뽑을 수 없어요.');
+  }
+  const pool = pileOf(locId);
+  if (!pool.length) throw new Error('그 장소에는 남은 카드가 없어요.');
+  const card = pool[crypto.getRandomValues(new Uint32Array(1))[0] % pool.length];
+  const got = await S.store.transaction(roomPath(`cards/${card.id}`), (cur) => (cur && cur.owner ? undefined : { owner: S.pid, takenBy: S.pid, takenRound: r, public: false }));
+  if (!got.committed) throw new Error('다른 사람이 먼저 가져갔어요. 다시 뽑아 주세요.');
+  if (tn && !(await useTurn(tn, { pid: S.pid, loc: locId, lap: tn.lap }))) {
+    await S.store.remove(roomPath(`cards/${card.id}`));
+    throw new Error('차례가 바뀌었어요. 다시 확인해 주세요.');
+  }
+  S.arrived = card.id;
+  setTimeout(() => { S.arrived = null; }, 900);
+  await log(`${who(S.pid)}님이 ${loc?.name || ''}에서 카드를 한 장 뽑았어요.`);
+  openModal({ type: 'card', id: card.id });
+}
+
+// 차례를 한 칸 넘긴다. 다른 사람이 먼저 넘겼으면 실패한다.
+async function useTurn(tn, pick) {
+  const res = await S.store.transaction(roomPath(`draw/${roundNo()}`), (cur) => {
+    const n = cur?.n || 0;
+    if (n !== tn.n) return undefined;
+    return { n: n + 1, picks: { ...(cur?.picks || {}), [`p${n}`]: pick } };
+  });
+  return res.committed;
+}
+
+async function passTurn() {
+  const tn = turnInfo();
+  if (!tn || tn.done || !isHost()) return;
+  if (await useTurn(tn, { pid: tn.pid, loc: null, lap: tn.lap })) await log(`방장이 ${who(tn.pid)}님 차례를 넘겼어요.`);
+}
+
+async function saveSheet(f, quiet = false) {
+  if (!f || !sheetOn()) return;
+  const fd = new FormData(f);
+  const sec = {};
+  S.theme.characters.forEach((c) => { const v = String(fd.get(`sec-${c.id}`) || '').trim(); if (v) sec[c.id] = v; });
+  const odd = Array.from({ length: S.theme.scoreSheet.oddities || 6 }, (_, i) => String(fd.get(`odd-${i}`) || '').trim());
+  await S.store.set(roomPath(`sheets/${S.pid}`), { sec, odd, memo: String(fd.get('memo') || '').trim(), t: S.store.now() });
+  if (!quiet) toast('점수표를 저장했어요.');
+}
+
 async function makePublic(id) {
   if (cardState(id).owner !== S.pid || !cardRules().public) return;
   await S.store.update(roomPath(`cards/${id}`), { public: true });
@@ -1500,6 +1724,7 @@ async function giveCard(id, to) {
 async function vote(id) {
   if (meta().phase !== 'vote' || isGM()) return;
   if (S.theme.vote?.noSelf && id === me().char) throw new Error('자기 자신에게는 투표할 수 없어요.');
+  await saveSheet($('#f-sheet'), true);
   await S.store.update(roomPath(`players/${S.pid}`), { vote: me().vote === id ? null : id });
 }
 
@@ -1552,6 +1777,13 @@ async function startGame(selVer) {
     return { ...m, phase: 'play', round: 0, roundEndsAt: S.store.now() + t.rounds[0].minutes * 60000 };
   });
   if (!res.committed) return;
+  // 시작 아이템은 그 캐릭터를 맡은 사람의 카드로 나눠 준다.
+  const deal = {};
+  (t.cards || []).filter((c) => c.start).forEach((c) => {
+    const p = holderOf(c.start);
+    if (p) deal[`cards/${c.id}`] = { owner: p.id, takenBy: p.id, takenRound: -1, public: false };
+  });
+  if (Object.keys(deal).length) await S.store.update(roomPath(), deal);
   await S.store.update(`lobby/${S.code}`, { phase: 'play' });
   await log('모두 동의해서 게임을 시작했어요.');
 }
@@ -1639,6 +1871,8 @@ function onClick(e) {
       break;
     }
     case 'take': busy(take(id)); break;
+    case 'draw': busy(draw(id)); break;
+    case 'pass-turn': busy(passTurn()); break;
     case 'view-card': openModal({ type: 'card', id: el.dataset.id }); break;
     case 'card-mode':
       S.modal.mode = el.dataset.mode || null;
@@ -1701,6 +1935,7 @@ function onSubmit(e) {
   else if (f.id === 'f-code') busy(joinRoom((data.code || '').trim().toUpperCase(), (data.name || '').trim()));
   else if (f.id === 'f-share') busy(shareCard(S.modal.id, new FormData(f).getAll('to')));
   else if (f.id === 'f-give') busy(giveCard(S.modal.id, data.to));
+  else if (f.id === 'f-sheet') busy(saveSheet(f));
   else if (f.id === 'f-chat') busy(sendChat(data.msg || ''));
 }
 
