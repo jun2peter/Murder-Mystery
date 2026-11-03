@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>머더 미스터리 테이블</title>
+  <meta name="description" content="친구들과 온라인으로 함께하는 머더 미스터리">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hahmlet:wght@400;600;800&family=IBM+Plex+Sans+KR:wght@400;500;600&family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@500&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="view" aria-live="polite">
+    <p class="boot">테이블을 준비하고 있어요…</p>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-back" data-act="close-modal"></div>
+    <div class="modal-box" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div id="docpane" class="docpane" hidden>
+    <div class="docpane-bar">
+      <strong class="docpane-title"></strong>
+      <div class="docpane-tools">
+        <button type="button" class="btn ghost sm" data-act="doc-zoom" data-z="-1" aria-label="작게">－</button>
+        <span class="docpane-zoom">100%</span>
+        <button type="button" class="btn ghost sm" data-act="doc-zoom" data-z="1" aria-label="크게">＋</button>
+        <button type="button" class="btn ghost sm" data-act="doc-tab">새 탭</button>
+        <button type="button" class="btn sm" data-act="doc-close">닫기</button>
+      </div>
+    </div>
+    <div class="docpane-body"><div class="docpane-pages"></div></div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

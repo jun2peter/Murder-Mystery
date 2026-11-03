@@ -1,0 +1,42 @@
+{
+  "no": 1,
+  "title": "騎上の空論",
+  "subtitle": "기상공론 · 18세기 영국의 경마장",
+  "summary": "우승마를 대신 타고 개선 레이스에 나선 유명 기수가 경기 도중 낙마해 숨졌다. 사고일까, 꾸며진 사건일까. 단서 카드 없이 핸드아웃만으로 진행하는 클로즈드 타입.",
+  "credit": "제작: 十楽ゲスト · toraku.booth.pm",
+  "kind": "pdf",
+  "players": { "min": 7, "max": 7 },
+  "allowGM": true,
+  "howto": "· 시작 전에 모두 '개요 읽기'로 개요를 읽고 캐릭터를 고르세요. 검사와 신문기자는 머더 미스터리 경험자용이에요.\n· 시작하면 각자 자기 핸드아웃만 볼 수 있어요.\n· 발언 순서와 개인실 호출은 검사가 정해요.\n· 밀담 때는 장소를 옮겨 따로 이야기하세요. 음성 채팅방을 장소별로 나눠 두면 편해요.\n· 최종 투표는 검사의 표로 결정돼요. 사고라고 생각하면 '사고였다'를 고르세요.\n· 진행자(GM)가 없으면 검사가 진행을 맡아요. GM 자료와 엔딩은 결과가 나온 뒤 함께 보세요.",
+  "lock": {"salt":"sy8Au+301Q3Ynxg8+7Ca5Q==","iter":150000,"check":"CVcQK0NB1CjSCZFmK5rcOuiPqq9NP1NVCjkRNOVHavc="},
+  "files": {
+    "overview": "files/overview.bin",
+    "gm": "files/gm.bin",
+    "ending": "files/ending.bin"
+  },
+  "characters": [
+    { "id": "jockey", "name": "기수", "sub": "騎手", "note": "유메사쿠라의 원래 기수 · 24세 남성", "file": "files/jockey.bin" },
+    { "id": "owner", "name": "목장주", "sub": "牧場主", "note": "유메사쿠라가 속한 목장 주인이자 경마장 주인 · 50세", "file": "files/owner.bin" },
+    { "id": "reception", "name": "접수원", "sub": "受付嬢", "note": "경마장의 베테랑 접수원 · 40대 여성", "file": "files/reception.bin" },
+    { "id": "trainer", "name": "조교사", "sub": "調教師", "note": "유메사쿠라를 키운 조교사 · 40대", "file": "files/trainer.bin" },
+    { "id": "reporter", "name": "신문기자", "sub": "新聞記者", "note": "경마장에 있던 신문기자 · 경험자용", "file": "files/reporter.bin" },
+    { "id": "regular", "name": "단골", "sub": "常連", "note": "경마장 단골손님 · 50세 남성", "file": "files/regular.bin" },
+    { "id": "prosecutor", "name": "검사", "sub": "検察官", "note": "사건을 수사한다 · 범인이 아님 · 진행 권한 · 경험자용", "file": "files/prosecutor.bin" }
+  ],
+  "rooms": [
+    { "id": "hall", "name": "넓은 방", "cap": 0, "note": "인원 제한 없음 · 전체 회의" },
+    { "id": "private", "name": "개인실", "cap": 2, "note": "검사와 1명만 · 검사가 불러요" },
+    { "id": "vip", "name": "VIP룸", "cap": 2, "note": "누구나 · 최대 2명" }
+  ],
+  "rounds": [
+    { "name": "핸드아웃 읽기", "minutes": 5, "note": "'내 핸드아웃'을 열어 읽어 주세요." },
+    { "name": "자기소개", "minutes": 10, "note": "검사가 정한 순서대로 자기소개를 해요." },
+    { "name": "전체 회의", "minutes": 20, "note": "모두 넓은 방에서 이야기해요." },
+    { "name": "밀담", "minutes": 20, "note": "개인실(검사와 1명)이나 VIP룸(최대 2명)으로 옮겨 따로 이야기해요. 검사가 개인실로 부르면 거절할 수 없어요." },
+    { "name": "검사의 추리", "minutes": 2, "note": "검사가 추리를 발표하고 범인을 임시로 지목해요." },
+    { "name": "모두의 추리", "minutes": 12, "note": "검사를 뺀 사람들이 한 명씩 2분 동안 추리와 지목을 발표해요. 사고라고 생각하면 지목하지 않아도 돼요." },
+    { "name": "투표 전 정리", "minutes": 5, "note": "마지막으로 생각을 정리해요." }
+  ],
+  "vote": { "final": "prosecutor", "allowNone": true, "noneLabel": "사고였다" },
+  "cards": []
+}

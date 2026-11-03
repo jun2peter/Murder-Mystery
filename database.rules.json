@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "lobby": {
+      ".read": true,
+      "$room": {
+        ".write": true
+      }
+    }
+  }
+}
