@@ -610,8 +610,10 @@ function voteView() {
   const mine = me();
   const voted = act.filter((p) => p.vote).length;
   const finalC = v.final ? charOf(v.final) : null;
-  const rule = finalC && holderOf(finalC.id) ? `${finalC.name}의 표가 최종 결정이 돼요.` : v.runoff ? '가장 많은 표를 받은 사람이 지목돼요. 동점이면 결선 투표를 해요.' : '가장 많은 표를 받은 쪽으로 결정돼요.';
-  const options = m.runoff ? t.characters.filter((c) => m.runoff.includes(c.id)) : t.characters;
+  const rule = (finalC && holderOf(finalC.id) ? `${finalC.name}의 표가 최종 결정이 돼요.` : v.runoff ? '가장 많은 표를 받은 사람이 지목돼요. 동점이면 결선 투표를 해요.' : '가장 많은 표를 받은 쪽으로 결정돼요.')
+    + (v.noSelf ? ' 자기 자신은 고를 수 없어요.' : '');
+  const options = (m.runoff ? t.characters.filter((c) => m.runoff.includes(c.id)) : t.characters)
+    .filter((c) => !(v.noSelf && c.id === mine.char));
   return `
   <section class="round-head">${stepsBar(t.rounds.length)}</section>
   <section class="phase-head">
@@ -644,7 +646,7 @@ function verdict() {
   const max = Math.max(0, ...Object.values(tally));
   const top = Object.keys(tally).filter((k) => tally[k] === max);
   if (top.length === 1) return { id: top[0], text: label(top[0]), how: `최다 득표 ${max}표`, label, tally, top };
-  return { id: null, text: '결정하지 못했어요', how: top.length ? `동점: ${top.map(label).join(', ')}` : '투표 없음', label, tally, top };
+  return { id: null, text: (top.length > 1 && v.tieText) || '결정하지 못했어요', how: top.length ? `동점: ${top.map(label).join(', ')}` : '투표 없음', label, tally, top };
 }
 
 function endView() {
@@ -1395,6 +1397,7 @@ async function giveCard(id, to) {
 
 async function vote(id) {
   if (meta().phase !== 'vote' || isGM()) return;
+  if (S.theme.vote?.noSelf && id === me().char) throw new Error('자기 자신에게는 투표할 수 없어요.');
   await S.store.update(roomPath(`players/${S.pid}`), { vote: me().vote === id ? null : id });
 }
 

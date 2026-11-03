@@ -18,7 +18,7 @@
 | `rounds` | 진행 단계. `{ "name", "minutes", "note", "pick", "talk" }` |
 | `talkMax` | 밀담 최대 인원(나 포함) |
 | `rooms` | 장소(없어도 됨). `{ "id", "name", "cap": 최대 인원(0=제한 없음), "note" }` |
-| `vote` | `{ "final": 표가 최종 결정이 되는 캐릭터, "allowNone": '범인 없음' 선택지, "noneLabel", "runoff": 동점이면 결선 투표 }` |
+| `vote` | `{ "final": 표가 최종 결정이 되는 캐릭터, "allowNone": '범인 없음' 선택지, "noneLabel", "runoff": 동점이면 결선 투표, "noSelf": 자기 자신 투표 금지, "tieText": 동점일 때 결과 이름(예: "동표") }` |
 | `cards`, `locations` | 단서 카드와 카드를 펼칠 장소 |
 | `cardRules` | `{ "public", "share", "give": false면 그 버튼을 숨김, "note": 안내 }` |
 | `relations` | 관계도. 아래 참고 |

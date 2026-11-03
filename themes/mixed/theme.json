@@ -1,0 +1,83 @@
+{
+  "no": 3,
+  "title": "MIXED",
+  "subtitle": "믹스드 · 뉴욕 호텔 개업 파티",
+  "summary": "뉴욕에 새로 문을 연 호텔 MIXED의 개업 파티 날 밤, 창업자 존 스미스가 1층 계단 사이에서 숨진 채 발견된다. 경찰 대신 부른 명탐정이 오기까지 5시간, 초대받은 네 사람이 직접 범인을 찾기로 한다. 카드 없이 자료가 단계마다 열리는 4인용, 진행자 없음.",
+  "credit": "작: おおつど · 썸네일: ねずみ",
+  "kind": "pdf",
+  "lang": "ja",
+  "players": { "min": 4, "max": 4 },
+  "allowGM": false,
+  "howto": "· 4명 모두 플레이어예요(진행자 없음). 시작 전에 '개요'와 '평면도'를 함께 읽고 캐릭터를 고르세요.\n· 시작하면 각자 자기 핸드아웃만 볼 수 있어요. 토론 ②·③·④가 시작될 때마다 공통 추가 정보와 내 추가 정보가 하나씩 열려요(③은 '？？？').\n· 핸드아웃에 【스태프의 눈】이라고 적힌 행동은 거짓말할 수 없어요. 그 밖에는 모두 거짓말해도 돼요. 【스태프의 눈】이 없는 행동을 있는 것처럼 꾸며도 안 돼요.\n· 핸드아웃과 추가 정보를 그대로 읽어 주거나 화면을 보여주면 안 돼요. 플레이어끼리 밀담도 금지라 밀담 채팅은 없어요.\n· 토론 ④는 방장이 '연장'으로 15분까지 늘릴 수 있어요. 시간은 텍스트로 할 때 기준이라, 말로 하면 모두 '건너뛰기'로 줄여도 돼요.\n· 투표에서는 자기 자신을 고를 수 없어요. 결과가 나오면 엔딩, 각자 후일담, 해설을 읽어요.",
+  "lock": {"salt":"fsvB5Q40H3sNARGTZXLSCQ==","iter":150000,"check":"+3YYD/O4BvY5P3RI3zzyxdlqGv7XXX5lTrLEopzY3FU="},
+  "docs": [
+    { "id": "overview", "title": "개요", "file": "files/overview.bin", "show": "always" },
+    { "id": "map", "title": "평면도", "file": "files/map.bin", "show": "always" },
+    { "id": "cover", "title": "표지", "file": "files/cover.bin", "show": "always" },
+    { "id": "common1", "title": "공통 추가 정보 ①", "file": "files/common1.bin", "show": "play", "from": 2 },
+    { "id": "common2", "title": "공통 추가 정보 ②", "file": "files/common2.bin", "show": "play", "from": 3 },
+    { "id": "common3", "title": "공통 추가 정보 ③", "file": "files/common3.bin", "show": "play", "from": 4 },
+    { "id": "ending", "title": "엔딩", "file": "files/ending.bin", "show": "end" },
+    { "id": "explain", "title": "해설", "file": "files/explain.bin", "show": "end" }
+  ],
+  "characters": [
+    { "id": "charlotte", "name": "샬럿 스미스", "sub": "회사원 · 20세", "note": "존 스미스의 아내로 소개됐어요. 긴 금발에 검은 드레스와 재킷. 얌전하고 붙임성이 좋아요. 2층 객실", "img": "img/charlotte.jpg",
+      "docs": [
+        { "title": "핸드아웃", "file": "files/charlotte-ho.bin", "from": 0 },
+        { "title": "추가 정보 ①", "file": "files/charlotte-a1.bin", "from": 2 },
+        { "title": "추가 정보 ②", "file": "files/charlotte-a2.bin", "from": 3 },
+        { "title": "추가 정보 ③ ？？？", "file": "files/charlotte-a3.bin", "from": 4 }
+      ],
+      "endDocs": [{ "title": "후일담", "file": "files/charlotte-epi.bin" }] },
+    { "id": "benjamin", "name": "벤저민 스미스", "sub": "저널리스트 · 21세", "note": "남색 정장 위에 로고 달린 윈드브레이커, 목에 카메라. 적극적이진 않지만 호기심이 많아요. 3층 객실", "img": "img/benjamin.jpg",
+      "docs": [
+        { "title": "핸드아웃", "file": "files/benjamin-ho.bin", "from": 0 },
+        { "title": "추가 정보 ①", "file": "files/benjamin-a1.bin", "from": 2 },
+        { "title": "추가 정보 ②", "file": "files/benjamin-a2.bin", "from": 3 },
+        { "title": "추가 정보 ③ ？？？", "file": "files/benjamin-a3.bin", "from": 4 }
+      ],
+      "endDocs": [{ "title": "후일담", "file": "files/benjamin-epi.bin" }] },
+    { "id": "sara", "name": "사라 왓슨", "sub": "사장 · 26세", "note": "존 스미스의 친구. 갈색빛 금발에 녹색 캐주얼 정장. 느긋하면서도 자신감과 신념이 있어요. 2층 객실", "img": "img/sara.jpg",
+      "docs": [
+        { "title": "핸드아웃", "file": "files/sara-ho.bin", "from": 0 },
+        { "title": "추가 정보 ①", "file": "files/sara-a1.bin", "from": 2 },
+        { "title": "추가 정보 ②", "file": "files/sara-a2.bin", "from": 3 },
+        { "title": "추가 정보 ③ ？？？", "file": "files/sara-a3.bin", "from": 4 }
+      ],
+      "endDocs": [{ "title": "후일담", "file": "files/sara-epi.bin" }] },
+    { "id": "adolf", "name": "아돌프 룸헤드", "sub": "의사 · 25세", "note": "존 스미스의 친구. 검은 정장에 해골 무늬 넥타이, 키가 커요. 이기적이지만 재능이 넘쳐요. 3층 객실", "img": "img/adolf.jpg",
+      "docs": [
+        { "title": "핸드아웃", "file": "files/adolf-ho.bin", "from": 0 },
+        { "title": "추가 정보 ①", "file": "files/adolf-a1.bin", "from": 2 },
+        { "title": "추가 정보 ②", "file": "files/adolf-a2.bin", "from": 3 },
+        { "title": "추가 정보 ③ ？？？", "file": "files/adolf-a3.bin", "from": 4 }
+      ],
+      "endDocs": [{ "title": "후일담", "file": "files/adolf-epi.bin" }] }
+  ],
+  "rounds": [
+    { "name": "핸드아웃 읽기", "minutes": 10, "note": "개요·평면도와 내 핸드아웃을 읽어요. 핸드아웃은 그대로 읽어 주거나 보여주면 안 돼요." },
+    { "name": "토론 ①", "minutes": 20, "note": "자유롭게 이야기해요. 【스태프의 눈】이 적힌 행동 말고는 거짓말해도 돼요." },
+    { "name": "토론 ②", "minutes": 20, "note": "공통 추가 정보 ①과 내 추가 정보 ①이 열렸어요. 먼저 읽고 이야기해요." },
+    { "name": "토론 ③", "minutes": 30, "note": "공통 추가 정보 ②와 내 추가 정보 ②가 열렸어요." },
+    { "name": "토론 ④", "minutes": 30, "note": "공통 추가 정보 ③과 내 '？？？'가 열렸어요. 필요하면 방장이 '연장'으로 15분까지 늘려요." },
+    { "name": "추리", "minutes": 15, "note": "한 명씩 범인과 그 근거를 발표해요. 끝나면 투표로 넘어가요(5분 정도)." }
+  ],
+  "vote": { "noSelf": true, "tieText": "동표" },
+  "endNote": "엔딩 자료는 최다 득표자에 맞는 쪽을 읽어요: 사라 2~4쪽 · 아돌프 5~6쪽 · 샬럿 7~8쪽 · 벤저민 9쪽 · 동표 10쪽. 그다음 각자 후일담, 마지막으로 해설을 읽어요.",
+  "relations": {
+    "width": 1000,
+    "people": [
+      { "id": "john", "name": "존 스미스", "sub": "호텔 MIXED 오너 · 26세", "note": "개업 파티 밤에 숨진 채 발견", "img": "img/john.jpg", "x": 500, "y": 380, "victim": true },
+      { "id": "charlotte", "x": 170, "y": 130 },
+      { "id": "sara", "x": 830, "y": 130 },
+      { "id": "benjamin", "x": 170, "y": 640 },
+      { "id": "adolf", "x": 830, "y": 640 }
+    ],
+    "links": [
+      { "a": "charlotte", "b": "john", "label": "아내로 소개됨" },
+      { "a": "sara", "b": "john", "label": "친구" },
+      { "a": "adolf", "b": "john", "label": "친구" },
+      { "a": "benjamin", "b": "john", "label": "파티에 초대받은 기자", "at": 0.36 }
+    ]
+  }
+}
