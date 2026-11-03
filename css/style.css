@@ -166,6 +166,11 @@ p { margin: 0; }
   padding: 5px 12px; cursor: pointer;
 }
 .phase-head { display: grid; gap: 10px; margin-bottom: 22px; max-width: 52rem; }
+.conn-lost {
+  margin: -8px 0 20px; padding: 10px 14px; border-radius: 8px;
+  background: rgba(192, 80, 91, 0.18); border: 1px solid var(--wine); color: var(--text); font-size: 0.9rem;
+}
+.host-note { margin: -10px 0 18px; font-size: 0.82rem; color: var(--muted); }
 .phase-head p.desc { color: var(--muted); }
 
 /* 캐릭터 선택 */

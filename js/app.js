@@ -28,6 +28,7 @@ const S = {
   files: new Map(),
   pending: new Set(),
   seen: { phase: null, round: null },
+  conn: 'ok',
 };
 
 /* ---------- 작은 도구들 ---------- */
@@ -127,7 +128,8 @@ async function boot() {
     return;
   }
   S.byId = Object.fromEntries(S.themes.map((t) => [t.id, t]));
-  S.store.listen('lobby', (v) => { S.lobby = v || {}; if (S.view === 'home') render(); });
+  if (isPeer()) S.store.onStatus(onConnStatus);
+  else S.store.listen('lobby', (v) => { S.lobby = v || {}; if (S.view === 'home') render(); });
 
   document.addEventListener('click', onClick);
   document.addEventListener('submit', onSubmit);
@@ -136,8 +138,29 @@ async function boot() {
 
   const q = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
   const cur = safe(() => JSON.parse(sGet('mm:cur')));
-  if (cur?.code && (!q || q === cur.code) && (await enterRoom(cur.code, cur.pid))) return;
+  if (cur?.code && (!q || q === cur.code)) {
+    $('#view').innerHTML = '<p class="boot">방에 다시 연결하고 있어요…</p>';
+    const r = await S.store.open(cur.code, cur.role === 'host' ? 'host' : 'join');
+    if (r.ok && (await enterRoom(cur.code, cur.pid))) return;
+    S.store.close();
+  }
   S.inviteCode = q;
+  render();
+}
+
+const isPeer = () => S.store?.mode === 'peer';
+const isServerHost = () => isPeer() && S.store.role === 'host';
+
+// 방장 모드에서 방장과의 연결 상태가 바뀔 때
+function onConnStatus(s) {
+  const was = S.conn;
+  S.conn = s;
+  if (S.view !== 'room') return;
+  if (s === 'ok' && was === 'lost' && S.store.role === 'client') {
+    S.store.update(roomPath(`players/${S.pid}`), { online: true }).catch(() => {});
+    S.cancelDisc = S.store.onDisconnect(roomPath(`players/${S.pid}`), { online: false });
+    toast('방장과 다시 연결됐어요.');
+  }
   render();
 }
 
@@ -172,9 +195,9 @@ function renderHome() {
       <h1 class="wordmark">머더 미스터리<br><em>테이블</em></h1>
       <p class="lede">테마를 고르고 이름을 적은 뒤 같은 방에 모이세요. 캐릭터는 모두가 동의해야 확정되고, 단서 카드는 테이블에 펼쳐 놓고 가져가요.</p>
     </header>
-    ${S.store.mode === 'local' ? '<p class="notice"><strong>테스트 모드</strong> · 아직 Firebase를 연결하지 않아서 같은 브라우저의 탭끼리만 연결돼요. 친구들과 하려면 README의 Firebase 설정을 마쳐 주세요.</p>' : ''}
-    ${last ? `<p class="notice">최근에 있던 방 <strong>${esc(last.code)}</strong> · ${esc(last.title || '')}
-      <button class="btn ghost sm" data-act="resume" data-code="${esc(last.code)}" data-name="${esc(last.name)}">${esc(last.name)}(으)로 다시 들어가기</button></p>` : ''}
+    ${isPeer() ? '<p class="notice"><strong>방장 모드</strong> · 방을 만든 사람의 브라우저가 게임을 진행해요. 친구들에게 방 코드나 초대 링크를 보내 주세요. 방장은 게임이 끝날 때까지 창을 닫지 마세요.</p>' : ''}
+    ${last ? `<p class="notice">최근에 있던 방 <strong>${esc(last.code)}</strong> · ${esc(last.title || '')}${last.role === 'host' ? ' · 내가 방장' : ''}
+      <button class="btn ghost sm" data-act="resume" data-code="${esc(last.code)}" data-name="${esc(last.name)}" data-role="${last.role === 'host' ? 'host' : 'join'}">${esc(last.name)}(으)로 다시 들어가기</button></p>` : ''}
     <div class="home-cols">
       <section>
         <p class="eyebrow">1 · 테마 고르기</p>
@@ -225,13 +248,13 @@ function enterPanel(t, name) {
       ${t.lock ? `<label class="field"><span>테마 암호 (방을 만들 때만 필요해요)</span><input class="input" id="in-pw" name="pw" type="password" autocomplete="off" value="${esc(lGet(`mm:pw:${t.id}`) || '')}"></label>` : ''}
       <button class="btn" type="submit">새 방 만들고 입장</button>
     </form>
-    <div class="room-list">
+    ${isPeer() ? '<p class="small muted">방을 만들면 방 코드가 생겨요. 친구들은 오른쪽 아래 \'방 코드로 들어가기\'나 초대 링크로 들어와요.</p>' : `<div class="room-list">
       <p class="small muted">${open.length ? '이 테마로 열려 있는 방 · 위에 이름을 적고 들어가세요' : '이 테마로 열려 있는 방이 아직 없어요.'}</p>
       ${open.map(([code, r]) => `<div class="room-row">
         <span><span class="room-code">${esc(code)}</span> <span class="muted small">${r.count || 0}명 모임</span></span>
         <button class="btn ghost sm" type="button" data-act="join-open" data-code="${esc(code)}">들어가기</button>
       </div>`).join('')}
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -245,6 +268,8 @@ function renderRoom() {
       <div class="roombar-title"><span class="theme-no">${esc(themeLabel(t))}</span><strong>${esc(t.title)}</strong></div>
       <button class="code-chip" data-act="copy-link" title="초대 링크 복사">방 ${esc(S.code)} · 링크 복사</button>
     </div>
+    ${S.conn === 'lost' ? '<p class="conn-lost">방장과 연결이 끊겼어요. 다시 연결하는 중이에요… 방장이 창을 닫았다면 다시 열 때까지 기다려 주세요.</p>' : ''}
+    ${isServerHost() ? '<p class="host-note">내가 방장이에요. 이 창이 게임을 진행하니 끝날 때까지 닫지 마세요. 새로고침은 괜찮아요.</p>' : ''}
     ${body}
   </div>`;
 }
@@ -750,8 +775,18 @@ async function createRoom(t, name, pw) {
     keyB64 = await Lock.exportKey(key);
     lSet(`mm:pw:${t.id}`, pw);
   }
-  let code = newCode();
-  for (let i = 0; i < 6 && (await S.store.get(`rooms/${code}/meta`)); i++) code = newCode();
+  let code = null;
+  for (let i = 0; i < 6 && !code; i++) {
+    const c = newCode();
+    const r = await S.store.open(c, 'host', { fresh: true });
+    if (!r.ok) {
+      if (r.reason === 'unavailable-id') continue;
+      throw new Error('연결 서버에 접속하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.');
+    }
+    if (await S.store.get(`rooms/${c}/meta`)) { S.store.close(); continue; }
+    code = c;
+  }
+  if (!code) throw new Error('방 코드를 만들지 못했어요. 다시 시도해 주세요.');
   const pid = newId();
   const now = S.store.now();
   await S.store.set(`rooms/${code}`, {
@@ -764,9 +799,24 @@ async function createRoom(t, name, pw) {
   await enterRoom(code, pid);
 }
 
-async function joinRoom(code, name) {
+async function joinRoom(code, name, as = 'join') {
   if (!/^[A-Z0-9]{4}$/.test(code)) throw new Error('방 코드는 4자리예요.');
   if (!name) throw new Error('이름을 적어 주세요.');
+  const r = await S.store.open(code, as);
+  if (!r.ok) {
+    throw new Error(as === 'host'
+      ? '방을 다시 열지 못했어요. 잠시 뒤 다시 시도해 주세요.'
+      : '방을 찾을 수 없어요. 코드가 맞는지, 방장이 사이트를 열어 두었는지 확인해 주세요.');
+  }
+  try {
+    await joinOpened(code, name);
+  } catch (e) {
+    S.store.close();
+    throw e;
+  }
+}
+
+async function joinOpened(code, name) {
   const room = await S.store.get(`rooms/${code}`);
   if (!room?.meta) throw new Error('그 코드의 방을 찾을 수 없어요.');
   const t = S.byId[room.meta.theme];
@@ -784,7 +834,7 @@ async function joinRoom(code, name) {
     await S.store.update(`lobby/${code}`, { count: Object.keys(room.players || {}).length + 1 });
     await S.store.push(`rooms/${code}/log`, { t: now, m: `${name}님이 들어왔어요.` });
   }
-  await enterRoom(code, pid);
+  if (!(await enterRoom(code, pid))) throw new Error('방에 들어가지 못했어요. 다시 시도해 주세요.');
 }
 
 async function enterRoom(code, pid) {
@@ -797,8 +847,9 @@ async function enterRoom(code, pid) {
   S.seen = { phase: room.meta.phase, round: room.meta.round };
   S.key = room.meta.key ? await Lock.importKey(room.meta.key) : null;
   S.files.clear();
-  sSet('mm:cur', JSON.stringify({ code, pid }));
-  lSet('mm:last', JSON.stringify({ code, name: room.players[pid].name, title: t.title }));
+  S.conn = 'ok';
+  sSet('mm:cur', JSON.stringify({ code, pid, role: S.store.role }));
+  lSet('mm:last', JSON.stringify({ code, name: room.players[pid].name, title: t.title, role: S.store.role }));
   history.replaceState(null, '', `?room=${code}`);
   S.unsub = S.store.listen(`rooms/${code}`, onRoom);
   await S.store.update(`rooms/${code}/players/${pid}`, { online: true });
@@ -812,7 +863,8 @@ function leaveView(msg) {
   S.unsub = null;
   S.cancelDisc?.();
   S.cancelDisc = null;
-  Object.assign(S, { view: 'home', room: null, code: null, pid: null, theme: null, key: null, modal: null, armed: null });
+  Object.assign(S, { view: 'home', room: null, code: null, pid: null, theme: null, key: null, modal: null, armed: null, conn: 'ok' });
+  S.store.close();
   closeDoc();
   sSet('mm:cur', null);
   history.replaceState(null, '', location.pathname);
@@ -822,23 +874,35 @@ function leaveView(msg) {
 
 async function leave() {
   const m = meta();
-  if (m.phase !== 'select') { leaveView(); return; }
-  if (!confirm('방에서 나갈까요? 고른 캐릭터는 풀려요.')) return;
+  const serverHost = isServerHost();
+  if (m.phase !== 'select') {
+    if (serverHost && !confirm('방장이 나가면 친구들 연결이 끊겨요. 나중에 같은 이름으로 다시 들어오면 이어서 할 수 있어요. 나갈까요?')) return;
+    leaveView();
+    return;
+  }
+  if (!confirm(serverHost ? '방장이 나가면 방이 닫혀요. 나갈까요?' : '방에서 나갈까요? 고른 캐릭터는 풀려요.')) return;
   const name = me().name;
   const code = S.code;
   const ps = players();
   const ver = (m.selVer || 0) + 1;
   const pid = S.pid;
   const nextHost = hostId() === pid ? ps.find((p) => p.id !== pid)?.id : hostId();
-  leaveView();
+  S.unsub?.();
+  S.unsub = null;
+  S.cancelDisc?.();
+  S.cancelDisc = null;
   lSet('mm:last', null);
-  if (ps.length <= 1) {
-    await S.store.remove(`rooms/${code}`);
-    await S.store.remove(`lobby/${code}`);
-  } else {
-    await S.store.update(`rooms/${code}`, { [`players/${pid}`]: null, 'meta/selVer': ver, 'meta/host': nextHost });
-    await S.store.update(`lobby/${code}`, { count: ps.length - 1 });
-    await S.store.push(`rooms/${code}/log`, { t: S.store.now(), m: `${name}님이 나갔어요.` });
+  try {
+    if (ps.length <= 1 || serverHost) {
+      await S.store.remove(`rooms/${code}`);
+      await S.store.remove(`lobby/${code}`);
+    } else {
+      await S.store.update(`rooms/${code}`, { [`players/${pid}`]: null, 'meta/selVer': ver, 'meta/host': nextHost });
+      await S.store.update(`lobby/${code}`, { count: ps.length - 1 });
+      await S.store.push(`rooms/${code}/log`, { t: S.store.now(), m: `${name}님이 나갔어요.` });
+    }
+  } finally {
+    leaveView();
   }
 }
 
@@ -1001,6 +1065,7 @@ function readyToStart() {
 
 function checkFlow() {
   if (S.view !== 'room' || !S.room) return;
+  if (isPeer() && !isServerHost()) return; // 방장 모드에서는 방장 창이 단계를 넘긴다
   const m = meta();
   if (m.phase === 'select' && readyToStart()) {
     once(`start:${m.selVer}`, () => startGame(m.selVer));
@@ -1079,7 +1144,7 @@ function onClick(e) {
       busy(joinRoom(el.dataset.code, ($('#in-name')?.value || '').trim()));
       break;
     case 'resume':
-      busy(joinRoom(el.dataset.code, el.dataset.name).catch((err) => { lSet('mm:last', null); render(); throw err; }));
+      busy(joinRoom(el.dataset.code, el.dataset.name, el.dataset.role === 'host' ? 'host' : 'join'));
       break;
     case 'leave': busy(leave()); break;
     case 'copy-link': copyLink(); break;
